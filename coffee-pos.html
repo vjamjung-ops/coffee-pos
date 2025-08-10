@@ -1,0 +1,1240 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coffee Shop POS - ระบบขายหน้าร้านกาแฟ</title>
+    
+    <!-- React & Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body { 
+            font-family: 'Kanit', sans-serif; 
+        }
+        .scrollbar-hide::-webkit-scrollbar { 
+            display: none; 
+        }
+        .scrollbar-hide { 
+            -ms-overflow-style: none; 
+            scrollbar-width: none; 
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+        .slide-in {
+            animation: slideIn 0.3s ease-out;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // ==================== SUPABASE CONFIG ====================
+        // ⚠️ แก้ไขค่าเหล่านี้ด้วยข้อมูลจาก Supabase Dashboard ของคุณ
+        const SUPABASE_URL = 'https://twdzqzwnadcisufkhgon.supabase.co'; // แก้ไขที่นี่
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR3ZHpxenduYWRjaXN1ZmtoZ29uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ4MTQzOTQsImV4cCI6MjA3MDM5MDM5NH0.b0Q2b3qRg0gaoBXNGPPFxnFZcmfTKmM15SDi2Q6roPU'; // แก้ไขที่นี่
+        
+        // Initialize Supabase client
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // ==================== Database Service ====================
+        const DatabaseService = {
+            // Menu Items
+            async getMenuItems() {
+                try {
+                    const { data, error } = await supabase
+                        .from('menu_items')
+                        .select('*')
+                        .eq('is_active', true)
+                        .order('category', { ascending: true })
+                        .order('name', { ascending: true });
+                    
+                    if (error) throw error;
+                    return data || [];
+                } catch (error) {
+                    console.error('Error fetching menu items:', error);
+                    return [];
+                }
+            },
+
+            async addMenuItem(item) {
+                try {
+                    const { data, error } = await supabase
+                        .from('menu_items')
+                        .insert([item])
+                        .select()
+                        .single();
+                    
+                    if (error) throw error;
+                    return { success: true, data };
+                } catch (error) {
+                    console.error('Error adding menu item:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async updateMenuItem(id, updates) {
+                try {
+                    const { data, error } = await supabase
+                        .from('menu_items')
+                        .update(updates)
+                        .eq('id', id)
+                        .select()
+                        .single();
+                    
+                    if (error) throw error;
+                    return { success: true, data };
+                } catch (error) {
+                    console.error('Error updating menu item:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async deleteMenuItem(id) {
+                try {
+                    const { error } = await supabase
+                        .from('menu_items')
+                        .update({ is_active: false })
+                        .eq('id', id);
+                    
+                    if (error) throw error;
+                    return { success: true };
+                } catch (error) {
+                    console.error('Error deleting menu item:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            // Orders
+            async createOrder(orderData) {
+                try {
+                    // สร้าง order number
+                    const orderNumber = `ORD${Date.now().toString().slice(-8)}`;
+                    
+                    // บันทึก order หลัก
+                    const { data: order, error: orderError } = await supabase
+                        .from('orders')
+                        .insert([{
+                            order_number: orderNumber,
+                            total: orderData.total,
+                            payment_method: orderData.paymentMethod,
+                            received_amount: orderData.receivedAmount,
+                            change_amount: orderData.change
+                        }])
+                        .select()
+                        .single();
+                    
+                    if (orderError) throw orderError;
+                    
+                    // บันทึก order items
+                    const orderItems = orderData.items.map(item => ({
+                        order_id: order.id,
+                        menu_item_id: item.id,
+                        name: item.name,
+                        price: item.price,
+                        quantity: item.quantity,
+                        size: item.size,
+                        sweetness: item.sweetness,
+                        subtotal: item.price * item.quantity
+                    }));
+                    
+                    const { error: itemsError } = await supabase
+                        .from('order_items')
+                        .insert(orderItems);
+                    
+                    if (itemsError) throw itemsError;
+                    
+                    return { success: true, data: order };
+                } catch (error) {
+                    console.error('Error creating order:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async getOrders(date) {
+                try {
+                    const startDate = new Date(date);
+                    startDate.setHours(0, 0, 0, 0);
+                    
+                    const endDate = new Date(date);
+                    endDate.setHours(23, 59, 59, 999);
+                    
+                    const { data, error } = await supabase
+                        .from('orders')
+                        .select(`
+                            *,
+                            order_items (*)
+                        `)
+                        .gte('created_at', startDate.toISOString())
+                        .lte('created_at', endDate.toISOString())
+                        .order('created_at', { ascending: false });
+                    
+                    if (error) throw error;
+                    return data || [];
+                } catch (error) {
+                    console.error('Error fetching orders:', error);
+                    return [];
+                }
+            },
+
+            async getSalesReport(days = 30) {
+                try {
+                    const endDate = new Date();
+                    const startDate = new Date();
+                    startDate.setDate(startDate.getDate() - days);
+                    
+                    const { data, error } = await supabase
+                        .from('orders')
+                        .select('*')
+                        .gte('created_at', startDate.toISOString())
+                        .lte('created_at', endDate.toISOString());
+                    
+                    if (error) throw error;
+                    
+                    // ดึงข้อมูล top items
+                    const { data: topItems, error: topError } = await supabase
+                        .from('order_items')
+                        .select('name, quantity, subtotal')
+                        .gte('created_at', startDate.toISOString());
+                    
+                    if (topError) throw topError;
+                    
+                    // Process data
+                    const report = processReportData(data || [], topItems || []);
+                    return report;
+                } catch (error) {
+                    console.error('Error fetching sales report:', error);
+                    return null;
+                }
+            }
+        };
+
+        // Helper function for processing report data
+        function processReportData(orders, orderItems) {
+            const now = new Date();
+            const today = now.toISOString().split('T')[0];
+            const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+            
+            let todayTotal = 0, todayCount = 0;
+            let weekTotal = 0, weekCount = 0;
+            let monthTotal = 0, monthCount = 0;
+            
+            orders.forEach(order => {
+                const orderDate = new Date(order.created_at);
+                const orderDateStr = orderDate.toISOString().split('T')[0];
+                
+                const total = parseFloat(order.total);
+                
+                if (orderDateStr === today) {
+                    todayTotal += total;
+                    todayCount++;
+                }
+                
+                if (orderDate >= weekAgo) {
+                    weekTotal += total;
+                    weekCount++;
+                }
+                
+                monthTotal += total;
+                monthCount++;
+            });
+            
+            // Process top items
+            const itemSales = {};
+            orderItems.forEach(item => {
+                if (!itemSales[item.name]) {
+                    itemSales[item.name] = { 
+                        name: item.name, 
+                        quantity: 0, 
+                        revenue: 0 
+                    };
+                }
+                itemSales[item.name].quantity += item.quantity;
+                itemSales[item.name].revenue += parseFloat(item.subtotal);
+            });
+            
+            const topItems = Object.values(itemSales)
+                .sort((a, b) => b.quantity - a.quantity)
+                .slice(0, 5);
+            
+            return {
+                today: { total: todayTotal, count: todayCount },
+                week: { total: weekTotal, count: weekCount },
+                month: { total: monthTotal, count: monthCount },
+                topItems
+            };
+        }
+
+        // ==================== Components ====================
+        
+        // Component: Loading Spinner
+        const LoadingSpinner = () => (
+            <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-600"></div>
+            </div>
+        );
+
+        // Component: Alert/Toast
+        const Toast = ({ message, type = 'success', onClose }) => {
+            useEffect(() => {
+                const timer = setTimeout(onClose, 3000);
+                return () => clearTimeout(timer);
+            }, [onClose]);
+
+            const bgColor = type === 'success' ? 'bg-green-500' : 'bg-red-500';
+
+            return (
+                <div className={`fixed top-4 right-4 ${bgColor} text-white px-6 py-3 rounded-lg shadow-lg slide-in z-50`}>
+                    <div className="flex items-center">
+                        <i className={`fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'} mr-2`}></i>
+                        {message}
+                    </div>
+                </div>
+            );
+        };
+
+        // Component: POS Screen
+        const POSScreen = () => {
+            const [menuItems, setMenuItems] = useState([]);
+            const [cart, setCart] = useState([]);
+            const [selectedCategory, setSelectedCategory] = useState('all');
+            const [showPayment, setShowPayment] = useState(false);
+            const [paymentMethod, setPaymentMethod] = useState('cash');
+            const [receivedAmount, setReceivedAmount] = useState('');
+            const [loading, setLoading] = useState(true);
+            const [toast, setToast] = useState(null);
+            const [processing, setProcessing] = useState(false);
+
+            const categories = [
+                { id: 'all', name: 'ทั้งหมด', icon: '📋' },
+                { id: 'coffee', name: 'กาแฟ', icon: '☕' },
+                { id: 'tea', name: 'ชา', icon: '🍵' },
+                { id: 'chocolate', name: 'ช็อกโกแลต', icon: '🍫' },
+                { id: 'milk', name: 'นม', icon: '🥛' },
+                { id: 'bakery', name: 'เบเกอรี่', icon: '🥐' }
+            ];
+
+            useEffect(() => {
+                loadMenuItems();
+            }, []);
+
+            const loadMenuItems = async () => {
+                setLoading(true);
+                const items = await DatabaseService.getMenuItems();
+                setMenuItems(items);
+                setLoading(false);
+            };
+
+            const filteredItems = selectedCategory === 'all' 
+                ? menuItems 
+                : menuItems.filter(item => item.category === selectedCategory);
+
+            const addToCart = (item) => {
+                const existingItem = cart.find(cartItem => 
+                    cartItem.id === item.id && 
+                    cartItem.size === 'M' && 
+                    cartItem.sweetness === '100%'
+                );
+
+                if (existingItem) {
+                    setCart(cart.map(cartItem => 
+                        cartItem === existingItem 
+                            ? { ...cartItem, quantity: cartItem.quantity + 1 }
+                            : cartItem
+                    ));
+                } else {
+                    setCart([...cart, { 
+                        ...item, 
+                        quantity: 1, 
+                        size: 'M', 
+                        sweetness: '100%',
+                        cartId: Date.now()
+                    }]);
+                }
+
+                // Show toast
+                setToast({ message: `เพิ่ม ${item.name} แล้ว`, type: 'success' });
+            };
+
+            const updateCartItem = (cartId, updates) => {
+                setCart(cart.map(item => 
+                    item.cartId === cartId ? { ...item, ...updates } : item
+                ));
+            };
+
+            const removeFromCart = (cartId) => {
+                setCart(cart.filter(item => item.cartId !== cartId));
+            };
+
+            const getTotalPrice = () => {
+                return cart.reduce((total, item) => {
+                    let price = parseFloat(item.price);
+                    if (item.size === 'L') price += 10;
+                    return total + (price * item.quantity);
+                }, 0);
+            };
+
+            const handlePayment = async () => {
+                if (cart.length === 0) return;
+                
+                const change = paymentMethod === 'cash' 
+                    ? parseFloat(receivedAmount || 0) - getTotalPrice() 
+                    : 0;
+
+                if (paymentMethod === 'cash' && change < 0) {
+                    setToast({ message: 'จำนวนเงินที่รับมาไม่พอ', type: 'error' });
+                    return;
+                }
+
+                setProcessing(true);
+
+                const orderData = {
+                    items: cart,
+                    total: getTotalPrice(),
+                    paymentMethod,
+                    receivedAmount: paymentMethod === 'cash' ? parseFloat(receivedAmount) : getTotalPrice(),
+                    change
+                };
+
+                const result = await DatabaseService.createOrder(orderData);
+
+                if (result.success) {
+                    setToast({ 
+                        message: `การขายสำเร็จ! ${paymentMethod === 'cash' ? `เงินทอน: ${change.toFixed(2)} บาท` : ''}`, 
+                        type: 'success' 
+                    });
+                    
+                    // Reset
+                    setCart([]);
+                    setShowPayment(false);
+                    setReceivedAmount('');
+                    setPaymentMethod('cash');
+                } else {
+                    setToast({ message: 'เกิดข้อผิดพลาด: ' + result.error, type: 'error' });
+                }
+
+                setProcessing(false);
+            };
+
+            return (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-full">
+                    {toast && (
+                        <Toast 
+                            message={toast.message} 
+                            type={toast.type} 
+                            onClose={() => setToast(null)} 
+                        />
+                    )}
+
+                    {/* Menu Section */}
+                    <div className="lg:col-span-2 bg-white rounded-lg shadow-lg p-4">
+                        {/* Categories */}
+                        <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-hide">
+                            {categories.map(cat => (
+                                <button
+                                    key={cat.id}
+                                    onClick={() => setSelectedCategory(cat.id)}
+                                    className={`px-4 py-2 rounded-lg whitespace-nowrap transition-all ${
+                                        selectedCategory === cat.id
+                                            ? 'bg-amber-600 text-white shadow-lg transform scale-105'
+                                            : 'bg-gray-100 hover:bg-gray-200'
+                                    }`}
+                                >
+                                    <span className="mr-2">{cat.icon}</span>
+                                    {cat.name}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Menu Grid */}
+                        {loading ? (
+                            <LoadingSpinner />
+                        ) : (
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 overflow-y-auto" 
+                                 style={{maxHeight: 'calc(100vh - 250px)'}}>
+                                {filteredItems.map(item => (
+                                    <button
+                                        key={item.id}
+                                        onClick={() => addToCart(item)}
+                                        className="bg-white border-2 border-gray-200 rounded-lg p-4 hover:border-amber-500 hover:shadow-lg transition-all transform hover:scale-105"
+                                    >
+                                        <div className="text-3xl mb-2">{item.image}</div>
+                                        <div className="font-medium text-sm">{item.name}</div>
+                                        <div className="text-amber-600 font-bold">฿{parseFloat(item.price).toFixed(2)}</div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Cart Section */}
+                    <div className="bg-white rounded-lg shadow-lg p-4 flex flex-col">
+                        <h3 className="text-xl font-bold mb-4 text-gray-800">
+                            <i className="fas fa-shopping-cart mr-2"></i>
+                            รายการสั่งซื้อ
+                        </h3>
+
+                        {/* Cart Items */}
+                        <div className="flex-1 overflow-y-auto space-y-2 mb-4">
+                            {cart.length === 0 ? (
+                                <div className="text-center text-gray-400 py-8">
+                                    <i className="fas fa-coffee text-4xl mb-2"></i>
+                                    <p>ยังไม่มีรายการ</p>
+                                </div>
+                            ) : (
+                                cart.map(item => (
+                                    <div key={item.cartId} className="border rounded-lg p-3 hover:shadow-md transition-shadow">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div>
+                                                <div className="font-medium">{item.name}</div>
+                                                <div className="text-sm text-gray-500">
+                                                    ฿{parseFloat(item.price).toFixed(2)} x {item.quantity}
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={() => removeFromCart(item.cartId)}
+                                                className="text-red-500 hover:text-red-700 transition-colors"
+                                            >
+                                                <i className="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+
+                                        {/* Options */}
+                                        {item.category !== 'bakery' && (
+                                            <div className="grid grid-cols-2 gap-2 text-sm">
+                                                <select
+                                                    value={item.size}
+                                                    onChange={(e) => updateCartItem(item.cartId, { size: e.target.value })}
+                                                    className="border rounded px-2 py-1 focus:outline-none focus:border-amber-500"
+                                                >
+                                                    <option value="S">S</option>
+                                                    <option value="M">M</option>
+                                                    <option value="L">L (+10฿)</option>
+                                                </select>
+                                                <select
+                                                    value={item.sweetness}
+                                                    onChange={(e) => updateCartItem(item.cartId, { sweetness: e.target.value })}
+                                                    className="border rounded px-2 py-1 focus:outline-none focus:border-amber-500"
+                                                >
+                                                    <option value="0%">0%</option>
+                                                    <option value="25%">25%</option>
+                                                    <option value="50%">50%</option>
+                                                    <option value="75%">75%</option>
+                                                    <option value="100%">100%</option>
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        {/* Quantity */}
+                                        <div className="flex items-center gap-2 mt-2">
+                                            <button
+                                                onClick={() => updateCartItem(item.cartId, { 
+                                                    quantity: Math.max(1, item.quantity - 1) 
+                                                })}
+                                                className="w-8 h-8 bg-gray-200 rounded hover:bg-gray-300 transition-colors"
+                                            >
+                                                -
+                                            </button>
+                                            <span className="w-8 text-center font-medium">{item.quantity}</span>
+                                            <button
+                                                onClick={() => updateCartItem(item.cartId, { 
+                                                    quantity: item.quantity + 1 
+                                                })}
+                                                className="w-8 h-8 bg-gray-200 rounded hover:bg-gray-300 transition-colors"
+                                            >
+                                                +
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+
+                        {/* Total & Payment */}
+                        <div className="border-t pt-4">
+                            <div className="flex justify-between text-xl font-bold mb-4">
+                                <span>รวมทั้งหมด:</span>
+                                <span className="text-amber-600">฿{getTotalPrice().toFixed(2)}</span>
+                            </div>
+
+                            {!showPayment ? (
+                                <button
+                                    onClick={() => setShowPayment(true)}
+                                    disabled={cart.length === 0}
+                                    className={`w-full py-3 rounded-lg font-medium transition-all ${
+                                        cart.length > 0
+                                            ? 'bg-amber-600 text-white hover:bg-amber-700 transform hover:scale-105'
+                                            : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                    }`}
+                                >
+                                    <i className="fas fa-credit-card mr-2"></i>
+                                    ชำระเงิน
+                                </button>
+                            ) : (
+                                <div className="space-y-3">
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button
+                                            onClick={() => setPaymentMethod('cash')}
+                                            className={`py-2 rounded-lg transition-all ${
+                                                paymentMethod === 'cash'
+                                                    ? 'bg-green-600 text-white'
+                                                    : 'bg-gray-200 hover:bg-gray-300'
+                                            }`}
+                                        >
+                                            <i className="fas fa-money-bill mr-1"></i>
+                                            เงินสด
+                                        </button>
+                                        <button
+                                            onClick={() => setPaymentMethod('qr')}
+                                            className={`py-2 rounded-lg transition-all ${
+                                                paymentMethod === 'qr'
+                                                    ? 'bg-blue-600 text-white'
+                                                    : 'bg-gray-200 hover:bg-gray-300'
+                                            }`}
+                                        >
+                                            <i className="fas fa-qrcode mr-1"></i>
+                                            QR
+                                        </button>
+                                    </div>
+
+                                    {paymentMethod === 'cash' && (
+                                        <input
+                                            type="number"
+                                            placeholder="จำนวนเงินที่รับ"
+                                            value={receivedAmount}
+                                            onChange={(e) => setReceivedAmount(e.target.value)}
+                                            className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:border-amber-500"
+                                        />
+                                    )}
+
+                                    {paymentMethod === 'cash' && receivedAmount && (
+                                        <div className="text-center bg-gray-50 py-2 rounded">
+                                            <span className="text-gray-600">เงินทอน: </span>
+                                            <span className="font-bold text-lg text-green-600">
+                                                ฿{Math.max(0, parseFloat(receivedAmount) - getTotalPrice()).toFixed(2)}
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button
+                                            onClick={() => setShowPayment(false)}
+                                            disabled={processing}
+                                            className="py-2 bg-gray-300 rounded-lg hover:bg-gray-400 transition-colors"
+                                        >
+                                            ยกเลิก
+                                        </button>
+                                        <button
+                                            onClick={handlePayment}
+                                            disabled={processing}
+                                            className={`py-2 rounded-lg transition-all ${
+                                                processing 
+                                                    ? 'bg-gray-400 cursor-not-allowed' 
+                                                    : 'bg-green-600 text-white hover:bg-green-700'
+                                            }`}
+                                        >
+                                            {processing ? (
+                                                <i className="fas fa-spinner fa-spin"></i>
+                                            ) : (
+                                                'ยืนยัน'
+                                            )}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Component: Menu Management
+        const MenuManagement = () => {
+            const [menuItems, setMenuItems] = useState([]);
+            const [editingItem, setEditingItem] = useState(null);
+            const [showAddForm, setShowAddForm] = useState(false);
+            const [formData, setFormData] = useState({
+                name: '',
+                category: 'coffee',
+                price: '',
+                image: '☕'
+            });
+            const [loading, setLoading] = useState(true);
+            const [toast, setToast] = useState(null);
+
+            useEffect(() => {
+                loadMenuItems();
+            }, []);
+
+            const loadMenuItems = async () => {
+                setLoading(true);
+                const items = await DatabaseService.getMenuItems();
+                setMenuItems(items);
+                setLoading(false);
+            };
+
+            const handleSave = async () => {
+                if (!formData.name || !formData.price) {
+                    setToast({ message: 'กรุณากรอกข้อมูลให้ครบ', type: 'error' });
+                    return;
+                }
+
+                let result;
+                if (editingItem) {
+                    result = await DatabaseService.updateMenuItem(editingItem.id, {
+                        ...formData,
+                        price: parseFloat(formData.price)
+                    });
+                } else {
+                    result = await DatabaseService.addMenuItem({
+                        ...formData,
+                        price: parseFloat(formData.price)
+                    });
+                }
+
+                if (result.success) {
+                    setToast({ message: 'บันทึกสำเร็จ', type: 'success' });
+                    await loadMenuItems();
+                    resetForm();
+                } else {
+                    setToast({ message: 'เกิดข้อผิดพลาด: ' + result.error, type: 'error' });
+                }
+            };
+
+            const handleDelete = async (id, name) => {
+                if (confirm(`ต้องการลบ "${name}" หรือไม่?`)) {
+                    const result = await DatabaseService.deleteMenuItem(id);
+                    if (result.success) {
+                        setToast({ message: 'ลบสำเร็จ', type: 'success' });
+                        await loadMenuItems();
+                    } else {
+                        setToast({ message: 'เกิดข้อผิดพลาด: ' + result.error, type: 'error' });
+                    }
+                }
+            };
+
+            const resetForm = () => {
+                setEditingItem(null);
+                setShowAddForm(false);
+                setFormData({ name: '', category: 'coffee', price: '', image: '☕' });
+            };
+
+            const categoryEmojis = {
+                coffee: '☕',
+                tea: '🍵',
+                chocolate: '🍫',
+                milk: '🥛',
+                bakery: '🥐'
+            };
+
+            return (
+                <div className="bg-white rounded-lg shadow-lg p-6">
+                    {toast && (
+                        <Toast 
+                            message={toast.message} 
+                            type={toast.type} 
+                            onClose={() => setToast(null)} 
+                        />
+                    )}
+
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-gray-800">
+                            <i className="fas fa-coffee mr-2"></i>
+                            จัดการเมนู
+                        </h2>
+                        <button
+                            onClick={() => setShowAddForm(true)}
+                            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                        >
+                            <i className="fas fa-plus mr-2"></i>
+                            เพิ่มเมนู
+                        </button>
+                    </div>
+
+                    {/* Add/Edit Form */}
+                    {(showAddForm || editingItem) && (
+                        <div className="mb-6 p-4 border-2 border-amber-200 rounded-lg bg-amber-50">
+                            <h3 className="font-bold mb-4 text-lg">
+                                {editingItem ? 'แก้ไขเมนู' : 'เพิ่มเมนูใหม่'}
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                <input
+                                    type="text"
+                                    placeholder="ชื่อเมนู"
+                                    value={formData.name}
+                                    onChange={(e) => setFormData({...formData, name: e.target.value})}
+                                    className="px-3 py-2 border rounded-lg focus:outline-none focus:border-amber-500"
+                                />
+                                <select
+                                    value={formData.category}
+                                    onChange={(e) => setFormData({
+                                        ...formData, 
+                                        category: e.target.value,
+                                        image: categoryEmojis[e.target.value]
+                                    })}
+                                    className="px-3 py-2 border rounded-lg focus:outline-none focus:border-amber-500"
+                                >
+                                    <option value="coffee">กาแฟ</option>
+                                    <option value="tea">ชา</option>
+                                    <option value="chocolate">ช็อกโกแลต</option>
+                                    <option value="milk">นม</option>
+                                    <option value="bakery">เบเกอรี่</option>
+                                </select>
+                                <input
+                                    type="number"
+                                    placeholder="ราคา"
+                                    value={formData.price}
+                                    onChange={(e) => setFormData({...formData, price: e.target.value})}
+                                    className="px-3 py-2 border rounded-lg focus:outline-none focus:border-amber-500"
+                                />
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={handleSave}
+                                        className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                                    >
+                                        <i className="fas fa-save mr-2"></i>
+                                        บันทึก
+                                    </button>
+                                    <button
+                                        onClick={resetForm}
+                                        className="flex-1 px-4 py-2 bg-gray-300 rounded-lg hover:bg-gray-400 transition-colors"
+                                    >
+                                        ยกเลิก
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Menu Table */}
+                    {loading ? (
+                        <LoadingSpinner />
+                    ) : (
+                        <div className="overflow-x-auto">
+                            <table className="w-full">
+                                <thead>
+                                    <tr className="border-b bg-gray-50">
+                                        <th className="text-left py-3 px-2">รูป</th>
+                                        <th className="text-left py-3">ชื่อเมนู</th>
+                                        <th className="text-left py-3">หมวดหมู่</th>
+                                        <th className="text-right py-3">ราคา</th>
+                                        <th className="text-center py-3">จัดการ</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {menuItems.map(item => (
+                                        <tr key={item.id} className="border-b hover:bg-gray-50 transition-colors">
+                                            <td className="py-3 text-2xl px-2">{item.image}</td>
+                                            <td className="py-3 font-medium">{item.name}</td>
+                                            <td className="py-3">
+                                                <span className="px-2 py-1 bg-gray-100 rounded-full text-sm">
+                                                    {item.category}
+                                                </span>
+                                            </td>
+                                            <td className="py-3 text-right font-bold text-amber-600">
+                                                ฿{parseFloat(item.price).toFixed(2)}
+                                            </td>
+                                            <td className="py-3 text-center">
+                                                <button
+                                                    onClick={() => {
+                                                        setEditingItem(item);
+                                                        setFormData({
+                                                            name: item.name,
+                                                            category: item.category,
+                                                            price: item.price.toString(),
+                                                            image: item.image
+                                                        });
+                                                    }}
+                                                    className="text-blue-600 hover:text-blue-800 mr-3 transition-colors"
+                                                >
+                                                    <i className="fas fa-edit"></i>
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDelete(item.id, item.name)}
+                                                    className="text-red-600 hover:text-red-800 transition-colors"
+                                                >
+                                                    <i className="fas fa-trash"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // Component: Sales History
+        const SalesHistory = () => {
+            const [orders, setOrders] = useState([]);
+            const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                loadOrders();
+            }, [selectedDate]);
+
+            const loadOrders = async () => {
+                setLoading(true);
+                const data = await DatabaseService.getOrders(selectedDate);
+                setOrders(data);
+                setLoading(false);
+            };
+
+            return (
+                <div className="bg-white rounded-lg shadow-lg p-6">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-gray-800">
+                            <i className="fas fa-history mr-2"></i>
+                            ประวัติการขาย
+                        </h2>
+                        <input
+                            type="date"
+                            value={selectedDate}
+                            onChange={(e) => setSelectedDate(e.target.value)}
+                            className="px-3 py-2 border rounded-lg focus:outline-none focus:border-amber-500"
+                        />
+                    </div>
+
+                    {loading ? (
+                        <LoadingSpinner />
+                    ) : orders.length === 0 ? (
+                        <div className="text-center text-gray-400 py-8">
+                            <i className="fas fa-receipt text-4xl mb-2"></i>
+                            <p>ไม่มีรายการขายในวันที่เลือก</p>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {orders.map(order => (
+                                <div key={order.id} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
+                                    <div className="flex justify-between items-start mb-3">
+                                        <div>
+                                            <div className="font-bold text-lg">
+                                                #{order.order_number}
+                                            </div>
+                                            <div className="text-sm text-gray-500">
+                                                {new Date(order.created_at).toLocaleTimeString('th-TH')}
+                                            </div>
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="font-bold text-xl text-amber-600">
+                                                ฿{parseFloat(order.total).toFixed(2)}
+                                            </div>
+                                            <div className="text-sm">
+                                                {order.payment_method === 'cash' ? '💵 เงินสด' : '📱 QR'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="border-t pt-3">
+                                        {order.order_items && order.order_items.map((item, idx) => (
+                                            <div key={idx} className="flex justify-between text-sm mb-1">
+                                                <span>
+                                                    {item.name} 
+                                                    {item.size && ` (${item.size})`}
+                                                    {item.sweetness && ` ${item.sweetness}`}
+                                                    x {item.quantity}
+                                                </span>
+                                                <span className="font-medium">
+                                                    ฿{parseFloat(item.subtotal).toFixed(2)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {order.payment_method === 'cash' && (
+                                        <div className="mt-3 pt-3 border-t text-sm">
+                                            <div className="flex justify-between">
+                                                <span>รับเงิน:</span>
+                                                <span>฿{parseFloat(order.received_amount).toFixed(2)}</span>
+                                            </div>
+                                            <div className="flex justify-between text-green-600 font-medium">
+                                                <span>เงินทอน:</span>
+                                                <span>฿{parseFloat(order.change_amount).toFixed(2)}</span>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // Component: Sales Report
+        const SalesReport = () => {
+            const [reportData, setReportData] = useState(null);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                loadReport();
+            }, []);
+
+            const loadReport = async () => {
+                setLoading(true);
+                const data = await DatabaseService.getSalesReport(30);
+                setReportData(data);
+                setLoading(false);
+            };
+
+            const StatCard = ({ title, value, count, icon, color }) => (
+                <div className="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition-shadow">
+                    <div className="flex items-center justify-between mb-4">
+                        <div className={`text-4xl ${color}`}>{icon}</div>
+                        <div className="text-right">
+                            <div className="text-gray-500 text-sm">{title}</div>
+                            <div className="text-3xl font-bold">฿{value.toFixed(2)}</div>
+                            <div className="text-sm text-gray-400">{count} รายการ</div>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            if (loading) return <LoadingSpinner />;
+
+            if (!reportData) {
+                return (
+                    <div className="text-center text-gray-400 py-8">
+                        <i className="fas fa-chart-line text-4xl mb-2"></i>
+                        <p>ไม่สามารถโหลดข้อมูลรายงานได้</p>
+                    </div>
+                );
+            }
+
+            return (
+                <div>
+                    <h2 className="text-2xl font-bold text-gray-800 mb-6">
+                        <i className="fas fa-chart-line mr-2"></i>
+                        รายงานยอดขาย
+                    </h2>
+
+                    {/* Summary Cards */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <StatCard
+                            title="วันนี้"
+                            value={reportData.today.total}
+                            count={reportData.today.count}
+                            icon="📅"
+                            color="text-green-600"
+                        />
+                        <StatCard
+                            title="7 วันล่าสุด"
+                            value={reportData.week.total}
+                            count={reportData.week.count}
+                            icon="📊"
+                            color="text-blue-600"
+                        />
+                        <StatCard
+                            title="30 วันล่าสุด"
+                            value={reportData.month.total}
+                            count={reportData.month.count}
+                            icon="📈"
+                            color="text-purple-600"
+                        />
+                    </div>
+
+                    {/* Top Selling Items */}
+                    <div className="bg-white rounded-lg shadow-lg p-6">
+                        <h3 className="text-xl font-bold mb-4">
+                            <i className="fas fa-trophy mr-2 text-yellow-500"></i>
+                            เมนูขายดี Top 5
+                        </h3>
+                        {reportData.topItems.length === 0 ? (
+                            <p className="text-gray-400 text-center py-4">ยังไม่มีข้อมูล</p>
+                        ) : (
+                            <div className="space-y-3">
+                                {reportData.topItems.map((item, index) => (
+                                    <div key={index} className="flex items-center justify-between p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-lg hover:shadow-md transition-shadow">
+                                        <div className="flex items-center">
+                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white mr-4 ${
+                                                index === 0 ? 'bg-gradient-to-r from-yellow-400 to-yellow-500' :
+                                                index === 1 ? 'bg-gradient-to-r from-gray-300 to-gray-400' :
+                                                index === 2 ? 'bg-gradient-to-r from-orange-400 to-orange-500' :
+                                                'bg-gray-300'
+                                            }`}>
+                                                {index + 1}
+                                            </div>
+                                            <div>
+                                                <div className="font-medium text-lg">{item.name}</div>
+                                                <div className="text-sm text-gray-500">
+                                                    ขายแล้ว {item.quantity} แก้ว
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="font-bold text-xl text-amber-600">
+                                                ฿{item.revenue.toFixed(2)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // Main App Component
+        const CoffeePOSApp = () => {
+            const [currentPage, setCurrentPage] = useState('pos');
+            const [connectionStatus, setConnectionStatus] = useState('checking');
+
+            useEffect(() => {
+                checkConnection();
+            }, []);
+
+            const checkConnection = async () => {
+                try {
+                    const { data, error } = await supabase
+                        .from('menu_items')
+                        .select('count')
+                        .limit(1);
+                    
+                    if (error) throw error;
+                    setConnectionStatus('connected');
+                } catch (error) {
+                    console.error('Connection error:', error);
+                    setConnectionStatus('error');
+                }
+            };
+
+            const navigation = [
+                { id: 'pos', name: 'หน้าขาย', icon: 'fas fa-cash-register' },
+                { id: 'menu', name: 'จัดการเมนู', icon: 'fas fa-coffee' },
+                { id: 'history', name: 'ประวัติ', icon: 'fas fa-history' },
+                { id: 'report', name: 'รายงาน', icon: 'fas fa-chart-line' }
+            ];
+
+            if (connectionStatus === 'checking') {
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-orange-50">
+                        <div className="text-center">
+                            <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-amber-600 mx-auto mb-4"></div>
+                            <p className="text-lg">กำลังเชื่อมต่อกับฐานข้อมูล...</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (connectionStatus === 'error') {
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-orange-50">
+                        <div className="bg-white rounded-lg shadow-lg p-8 max-w-md">
+                            <div className="text-red-500 text-4xl text-center mb-4">
+                                <i className="fas fa-exclamation-triangle"></i>
+                            </div>
+                            <h2 className="text-xl font-bold text-center mb-4">ไม่สามารถเชื่อมต่อฐานข้อมูลได้</h2>
+                            <p className="text-gray-600 mb-4">กรุณาตรวจสอบ:</p>
+                            <ul className="list-disc list-inside text-gray-600 mb-4">
+                                <li>SUPABASE_URL และ SUPABASE_ANON_KEY ถูกต้องหรือไม่</li>
+                                <li>Tables ถูกสร้างแล้วหรือยัง</li>
+                                <li>RLS Policies ถูกตั้งค่าแล้วหรือยัง</li>
+                            </ul>
+                            <button 
+                                onClick={() => window.location.reload()} 
+                                className="w-full bg-amber-600 text-white py-2 rounded-lg hover:bg-amber-700"
+                            >
+                                ลองใหม่อีกครั้ง
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-50">
+                    {/* Header */}
+                    <header className="bg-gradient-to-r from-amber-700 to-amber-600 text-white shadow-lg">
+                        <div className="container mx-auto px-4 py-4">
+                            <div className="flex items-center justify-between">
+                                <h1 className="text-2xl font-bold">
+                                    <i className="fas fa-mug-hot mr-2"></i>
+                                    Coffee Shop POS
+                                </h1>
+                                <div className="flex items-center gap-4">
+                                    <div className="text-sm">
+                                        <i className="fas fa-database mr-2 text-green-300"></i>
+                                        <span className="text-green-300">เชื่อมต่อแล้ว</span>
+                                    </div>
+                                    <div className="text-sm">
+                                        <i className="fas fa-clock mr-2"></i>
+                                        {new Date().toLocaleDateString('th-TH', { 
+                                            weekday: 'long', 
+                                            year: 'numeric', 
+                                            month: 'long', 
+                                            day: 'numeric' 
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Navigation */}
+                    <nav className="bg-white shadow-md sticky top-0 z-10">
+                        <div className="container mx-auto px-4">
+                            <div className="flex space-x-1">
+                                {navigation.map(nav => (
+                                    <button
+                                        key={nav.id}
+                                        onClick={() => setCurrentPage(nav.id)}
+                                        className={`px-4 py-3 font-medium transition-all ${
+                                            currentPage === nav.id
+                                                ? 'text-amber-600 border-b-2 border-amber-600'
+                                                : 'text-gray-600 hover:text-amber-600'
+                                        }`}
+                                    >
+                                        <i className={`${nav.icon} mr-2`}></i>
+                                        {nav.name}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </nav>
+
+                    {/* Main Content */}
+                    <main className="container mx-auto px-4 py-6">
+                        {currentPage === 'pos' && <POSScreen />}
+                        {currentPage === 'menu' && <MenuManagement />}
+                        {currentPage === 'history' && <SalesHistory />}
+                        {currentPage === 'report' && <SalesReport />}
+                    </main>
+
+                    {/* Footer */}
+                    <footer className="mt-auto bg-gray-800 text-white py-4 text-center">
+                        <p className="text-sm">
+                            © 2024 Coffee Shop POS | Version 2.0 with Supabase
+                        </p>
+                    </footer>
+                </div>
+            );
+        };
+
+        // Render App
+        ReactDOM.render(<CoffeePOSApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>
