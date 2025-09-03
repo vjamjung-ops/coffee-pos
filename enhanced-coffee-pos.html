@@ -1,0 +1,1244 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coffee Shop POS Pro - ระบบขายหน้าร้านกาแฟ</title>
+    
+    <!-- React & Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <!-- Chart.js for reports -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body { 
+            font-family: 'Kanit', sans-serif; 
+        }
+        .scrollbar-hide::-webkit-scrollbar { 
+            display: none; 
+        }
+        .scrollbar-hide { 
+            -ms-overflow-style: none; 
+            scrollbar-width: none; 
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+        .slide-in {
+            animation: slideIn 0.3s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-out;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback, createContext, useContext } = React;
+
+        // ==================== SUPABASE CONFIG ====================
+        const SUPABASE_URL = 'https://twdzqzwnadcisufkhgon.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR3ZHpxenduYWRjaXN1ZmtoZ29uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ4MTQzOTQsImV4cCI6MjA3MDM5MDM5NH0.b0Q2b3qRg0gaoBXNGPPFxnFZcmfTKmM15SDi2Q6roPU';
+        
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // ==================== Auth Context ====================
+        const AuthContext = createContext(null);
+
+        const AuthProvider = ({ children }) => {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                const storedUser = localStorage.getItem('coffee_pos_user');
+                if (storedUser) {
+                    setUser(JSON.parse(storedUser));
+                }
+                setLoading(false);
+            }, []);
+
+            const login = async (email, password) => {
+                try {
+                    const { data, error } = await supabase
+                        .rpc('authenticate_user', {
+                            user_email: email,
+                            user_password: password
+                        });
+
+                    if (error) throw error;
+                    
+                    if (data && data.length > 0) {
+                        const userData = data[0];
+                        localStorage.setItem('coffee_pos_user', JSON.stringify(userData));
+                        setUser(userData);
+                        return { success: true };
+                    } else {
+                        return { success: false, error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' };
+                    }
+                } catch (error) {
+                    console.error('Login error:', error);
+                    return { success: false, error: error.message };
+                }
+            };
+
+            const logout = () => {
+                localStorage.removeItem('coffee_pos_user');
+                setUser(null);
+            };
+
+            return (
+                <AuthContext.Provider value={{ user, login, logout, loading }}>
+                    {children}
+                </AuthContext.Provider>
+            );
+        };
+
+        const useAuth = () => {
+            const context = useContext(AuthContext);
+            if (!context) {
+                throw new Error('useAuth must be used within AuthProvider');
+            }
+            return context;
+        };
+
+        // ==================== Database Service ====================
+        const DatabaseService = {
+            // Categories
+            async getCategories() {
+                try {
+                    const { data, error } = await supabase
+                        .from('categories')
+                        .select('*')
+                        .eq('is_active', true)
+                        .order('display_order', { ascending: true });
+                    
+                    if (error) throw error;
+                    return data || [];
+                } catch (error) {
+                    console.error('Error fetching categories:', error);
+                    // Return default categories if table doesn't exist
+                    return [
+                        { id: 1, name: 'กาแฟ', code: 'coffee', icon: '☕', display_order: 1, is_active: true },
+                        { id: 2, name: 'ชา', code: 'tea', icon: '🍵', display_order: 2, is_active: true },
+                        { id: 3, name: 'ช็อกโกแลต', code: 'chocolate', icon: '🍫', display_order: 3, is_active: true },
+                        { id: 4, name: 'นม', code: 'milk', icon: '🥛', display_order: 4, is_active: true },
+                        { id: 5, name: 'เบเกอรี่', code: 'bakery', icon: '🥐', display_order: 5, is_active: true }
+                    ];
+                }
+            },
+
+            async saveCategory(category) {
+                try {
+                    if (category.id) {
+                        const { data, error } = await supabase
+                            .from('categories')
+                            .update(category)
+                            .eq('id', category.id)
+                            .select()
+                            .single();
+                        
+                        if (error) throw error;
+                        return { success: true, data };
+                    } else {
+                        const { data, error } = await supabase
+                            .from('categories')
+                            .insert([category])
+                            .select()
+                            .single();
+                        
+                        if (error) throw error;
+                        return { success: true, data };
+                    }
+                } catch (error) {
+                    console.error('Error saving category:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async deleteCategory(id) {
+                try {
+                    const { error } = await supabase
+                        .from('categories')
+                        .update({ is_active: false })
+                        .eq('id', id);
+                    
+                    if (error) throw error;
+                    return { success: true };
+                } catch (error) {
+                    console.error('Error deleting category:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            // Menu Items with detailed options
+            async getMenuItems() {
+                try {
+                    const { data, error } = await supabase
+                        .from('menu_items')
+                        .select('*')
+                        .eq('is_active', true)
+                        .order('category', { ascending: true })
+                        .order('name', { ascending: true });
+                    
+                    if (error) throw error;
+                    return data || [];
+                } catch (error) {
+                    console.error('Error fetching menu items:', error);
+                    return [];
+                }
+            },
+
+            async getMenuAddons() {
+                try {
+                    const { data, error } = await supabase
+                        .from('menu_addons')
+                        .select('*')
+                        .eq('is_active', true)
+                        .order('category', { ascending: true })
+                        .order('name', { ascending: true });
+                    
+                    if (error) throw error;
+                    return data || [];
+                } catch (error) {
+                    console.error('Error fetching addons:', error);
+                    return [];
+                }
+            },
+
+            async addMenuItem(item) {
+                try {
+                    const { data, error } = await supabase
+                        .from('menu_items')
+                        .insert([item])
+                        .select()
+                        .single();
+                    
+                    if (error) throw error;
+                    return { success: true, data };
+                } catch (error) {
+                    console.error('Error adding menu item:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async updateMenuItem(id, updates) {
+                try {
+                    const { data, error } = await supabase
+                        .from('menu_items')
+                        .update({...updates, updated_at: new Date().toISOString()})
+                        .eq('id', id)
+                        .select()
+                        .single();
+                    
+                    if (error) throw error;
+                    return { success: true, data };
+                } catch (error) {
+                    console.error('Error updating menu item:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async deleteMenuItem(id) {
+                try {
+                    const { error } = await supabase
+                        .from('menu_items')
+                        .update({ is_active: false })
+                        .eq('id', id);
+                    
+                    if (error) throw error;
+                    return { success: true };
+                } catch (error) {
+                    console.error('Error deleting menu item:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            // Addons
+            async addAddon(addon) {
+                try {
+                    const { data, error } = await supabase
+                        .from('menu_addons')
+                        .insert([addon])
+                        .select()
+                        .single();
+                    
+                    if (error) throw error;
+                    return { success: true, data };
+                } catch (error) {
+                    console.error('Error adding addon:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async updateAddon(id, updates) {
+                try {
+                    const { data, error } = await supabase
+                        .from('menu_addons')
+                        .update(updates)
+                        .eq('id', id)
+                        .select()
+                        .single();
+                    
+                    if (error) throw error;
+                    return { success: true, data };
+                } catch (error) {
+                    console.error('Error updating addon:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async deleteAddon(id) {
+                try {
+                    const { error } = await supabase
+                        .from('menu_addons')
+                        .update({ is_active: false })
+                        .eq('id', id);
+                    
+                    if (error) throw error;
+                    return { success: true };
+                } catch (error) {
+                    console.error('Error deleting addon:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            // Cash Drawer
+            async getCashDrawer(date) {
+                try {
+                    const startDate = new Date(date);
+                    startDate.setHours(0, 0, 0, 0);
+                    
+                    const endDate = new Date(date);
+                    endDate.setHours(23, 59, 59, 999);
+                    
+                    const { data, error } = await supabase
+                        .from('cash_drawer')
+                        .select('*')
+                        .gte('date', startDate.toISOString())
+                        .lte('date', endDate.toISOString())
+                        .single();
+                    
+                    if (error && error.code !== 'PGRST116') throw error;
+                    return data;
+                } catch (error) {
+                    console.error('Error fetching cash drawer:', error);
+                    return null;
+                }
+            },
+
+            async saveCashDrawer(drawerData) {
+                try {
+                    const { data, error } = await supabase
+                        .from('cash_drawer')
+                        .upsert([drawerData])
+                        .select()
+                        .single();
+                    
+                    if (error) throw error;
+                    return { success: true, data };
+                } catch (error) {
+                    console.error('Error saving cash drawer:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            // Orders
+            async createOrder(orderData, userId) {
+                try {
+                    const orderNumber = `ORD${Date.now().toString().slice(-8)}`;
+                    
+                    const { data: order, error: orderError } = await supabase
+                        .from('orders')
+                        .insert([{
+                            order_number: orderNumber,
+                            total: orderData.total,
+                            payment_method: orderData.paymentMethod,
+                            received_amount: orderData.receivedAmount,
+                            change_amount: orderData.change,
+                            user_id: userId
+                        }])
+                        .select()
+                        .single();
+                    
+                    if (orderError) throw orderError;
+                    
+                    const orderItems = orderData.items.map(item => ({
+                        order_id: order.id,
+                        menu_item_id: item.id,
+                        name: item.name,
+                        price: item.price,
+                        quantity: item.quantity,
+                        size: item.size,
+                        temperature: item.temperature,
+                        sweetness: item.sweetness,
+                        addons: item.addons || [],
+                        subtotal: item.subtotal
+                    }));
+                    
+                    const { error: itemsError } = await supabase
+                        .from('order_items')
+                        .insert(orderItems);
+                    
+                    if (itemsError) throw itemsError;
+                    
+                    return { success: true, data: order };
+                } catch (error) {
+                    console.error('Error creating order:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async getOrders(date) {
+                try {
+                    const startDate = new Date(date);
+                    startDate.setHours(0, 0, 0, 0);
+                    
+                    const endDate = new Date(date);
+                    endDate.setHours(23, 59, 59, 999);
+                    
+                    const { data, error } = await supabase
+                        .from('orders')
+                        .select(`
+                            *,
+                            order_items (*),
+                            users (name)
+                        `)
+                        .eq('is_deleted', false)
+                        .gte('created_at', startDate.toISOString())
+                        .lte('created_at', endDate.toISOString())
+                        .order('created_at', { ascending: false });
+                    
+                    if (error) throw error;
+                    return data || [];
+                } catch (error) {
+                    console.error('Error fetching orders:', error);
+                    return [];
+                }
+            },
+
+            async updateOrder(orderId, updates) {
+                try {
+                    const { data, error } = await supabase
+                        .from('orders')
+                        .update({...updates, updated_at: new Date().toISOString()})
+                        .eq('id', orderId)
+                        .select()
+                        .single();
+                    
+                    if (error) throw error;
+                    return { success: true, data };
+                } catch (error) {
+                    console.error('Error updating order:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async deleteOrder(orderId) {
+                try {
+                    const { error } = await supabase
+                        .from('orders')
+                        .update({ is_deleted: true })
+                        .eq('id', orderId);
+                    
+                    if (error) throw error;
+                    return { success: true };
+                } catch (error) {
+                    console.error('Error deleting order:', error);
+                    return { success: false, error: error.message };
+                }
+            },
+
+            async getSalesReport(startDate, endDate, reportType = 'daily') {
+                try {
+                    const { data: orders, error: ordersError } = await supabase
+                        .from('orders')
+                        .select('*')
+                        .eq('is_deleted', false)
+                        .gte('created_at', startDate.toISOString())
+                        .lte('created_at', endDate.toISOString());
+                    
+                    if (ordersError) throw ordersError;
+
+                    const { data: orderItems, error: itemsError } = await supabase
+                        .from('order_items')
+                        .select(`
+                            *,
+                            orders!inner(is_deleted, created_at),
+                            menu_items(category)
+                        `)
+                        .eq('orders.is_deleted', false)
+                        .gte('orders.created_at', startDate.toISOString())
+                        .lte('orders.created_at', endDate.toISOString());
+                    
+                    if (itemsError) throw itemsError;
+
+                    return { orders, orderItems };
+                } catch (error) {
+                    console.error('Error fetching sales report:', error);
+                    return { orders: [], orderItems: [] };
+                }
+            }
+        };
+
+        // ==================== Components ====================
+        
+        // Component: Login Screen
+        const LoginScreen = () => {
+            const { login } = useAuth();
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState('');
+
+            const handleLogin = async (e) => {
+                e.preventDefault();
+                setLoading(true);
+                setError('');
+
+                const result = await login(email, password);
+                
+                if (!result.success) {
+                    setError(result.error);
+                }
+                
+                setLoading(false);
+            };
+
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 to-orange-50">
+                    <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
+                        <div className="text-center mb-8">
+                            <div className="text-5xl mb-4">☕</div>
+                            <h1 className="text-3xl font-bold text-gray-800">Coffee Shop POS</h1>
+                            <p className="text-gray-600 mt-2">เข้าสู่ระบบเพื่อใช้งาน</p>
+                        </div>
+
+                        <form onSubmit={handleLogin} className="space-y-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    อีเมล
+                                </label>
+                                <input
+                                    type="email"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-amber-500"
+                                    placeholder="admin@coffee.shop"
+                                    required
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    รหัสผ่าน
+                                </label>
+                                <input
+                                    type="password"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-amber-500"
+                                    placeholder="••••••••"
+                                    required
+                                />
+                            </div>
+
+                            {error && (
+                                <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm">
+                                    <i className="fas fa-exclamation-circle mr-2"></i>
+                                    {error}
+                                </div>
+                            )}
+
+                            <button
+                                type="submit"
+                                disabled={loading}
+                                className={`w-full py-3 rounded-lg font-medium transition-all ${
+                                    loading 
+                                        ? 'bg-gray-400 cursor-not-allowed' 
+                                        : 'bg-amber-600 hover:bg-amber-700 text-white'
+                                }`}
+                            >
+                                {loading ? (
+                                    <span>
+                                        <i className="fas fa-spinner fa-spin mr-2"></i>
+                                        กำลังเข้าสู่ระบบ...
+                                    </span>
+                                ) : (
+                                    <span>
+                                        <i className="fas fa-sign-in-alt mr-2"></i>
+                                        เข้าสู่ระบบ
+                                    </span>
+                                )}
+                            </button>
+                        </form>
+
+                        <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+                            <p className="text-sm text-gray-600">
+                                <strong>Demo Account:</strong><br/>
+                                Email: admin@coffee.shop<br/>
+                                Password: admin123
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Component: Toast Notification
+        const Toast = ({ message, type = 'success', onClose }) => {
+            useEffect(() => {
+                const timer = setTimeout(onClose, 3000);
+                return () => clearTimeout(timer);
+            }, [onClose]);
+
+            const bgColor = type === 'success' ? 'bg-green-500' : 
+                           type === 'error' ? 'bg-red-500' : 
+                           'bg-blue-500';
+
+            return (
+                <div className={`fixed top-4 right-4 ${bgColor} text-white px-6 py-3 rounded-lg shadow-lg slide-in z-50`}>
+                    <div className="flex items-center">
+                        <i className={`fas fa-${
+                            type === 'success' ? 'check-circle' : 
+                            type === 'error' ? 'exclamation-circle' : 
+                            'info-circle'
+                        } mr-2`}></i>
+                        {message}
+                    </div>
+                </div>
+            );
+        };
+
+        // Component: Enhanced POS Screen
+        const POSScreen = () => {
+            const { user } = useAuth();
+            const [menuItems, setMenuItems] = useState([]);
+            const [addons, setAddons] = useState([]);
+            const [categories, setCategories] = useState([]);
+            const [cart, setCart] = useState([]);
+            const [selectedCategory, setSelectedCategory] = useState('all');
+            const [showPayment, setShowPayment] = useState(false);
+            const [showCustomization, setShowCustomization] = useState(false);
+            const [selectedItem, setSelectedItem] = useState(null);
+            const [paymentMethod, setPaymentMethod] = useState('cash');
+            const [receivedAmount, setReceivedAmount] = useState('');
+            const [loading, setLoading] = useState(true);
+            const [toast, setToast] = useState(null);
+            const [processing, setProcessing] = useState(false);
+
+            useEffect(() => {
+                loadData();
+            }, []);
+
+            const loadData = async () => {
+                setLoading(true);
+                const [items, addonsList, categoriesList] = await Promise.all([
+                    DatabaseService.getMenuItems(),
+                    DatabaseService.getMenuAddons(),
+                    DatabaseService.getCategories()
+                ]);
+                setMenuItems(items);
+                setAddons(addonsList);
+                setCategories(categoriesList);
+                setLoading(false);
+            };
+
+            const filteredItems = selectedCategory === 'all' 
+                ? menuItems 
+                : menuItems.filter(item => item.category === selectedCategory);
+
+            const handleItemClick = (item) => {
+                if (item.category === 'bakery' || (!item.allow_size && !item.allow_sweetness && !item.allow_addons)) {
+                    addToCart({
+                        ...item,
+                        size: 'M',
+                        temperature: 'hot',
+                        sweetness: '100%',
+                        selectedAddons: []
+                    });
+                } else {
+                    setSelectedItem({
+                        ...item,
+                        size: 'M',
+                        temperature: 'hot',
+                        sweetness: '100%',
+                        selectedAddons: []
+                    });
+                    setShowCustomization(true);
+                }
+            };
+
+            const addToCart = (itemWithOptions) => {
+                const cartId = Date.now();
+                const subtotal = calculateItemPrice(itemWithOptions);
+                
+                const cartItem = {
+                    ...itemWithOptions,
+                    cartId,
+                    quantity: 1,
+                    subtotal,
+                    addons: itemWithOptions.selectedAddons
+                };
+
+                setCart([...cart, cartItem]);
+                setToast({ message: `เพิ่ม ${itemWithOptions.name} แล้ว`, type: 'success' });
+                setShowCustomization(false);
+                setSelectedItem(null);
+            };
+
+            const calculateItemPrice = (item) => {
+                let price = parseFloat(item.price || 0);
+                
+                // Add size price
+                if (item.size === 'L') price += 10;
+                
+                // Add temperature price (cold drinks +5)
+                if (item.temperature === 'cold') price += 5;
+                
+                // Add addons price
+                if (item.selectedAddons && item.selectedAddons.length > 0) {
+                    item.selectedAddons.forEach(addon => {
+                        price += parseFloat(addon.price);
+                    });
+                }
+                
+                return price;
+            };
+
+            const updateCartItem = (cartId, updates) => {
+                setCart(cart.map(item => {
+                    if (item.cartId === cartId) {
+                        const updated = { ...item, ...updates };
+                        updated.subtotal = calculateItemPrice(updated) * updated.quantity;
+                        return updated;
+                    }
+                    return item;
+                }));
+            };
+
+            const removeFromCart = (cartId) => {
+                setCart(cart.filter(item => item.cartId !== cartId));
+            };
+
+            const getTotalPrice = () => {
+                return cart.reduce((total, item) => total + item.subtotal, 0);
+            };
+
+            const handlePayment = async () => {
+                if (cart.length === 0) return;
+                
+                const change = paymentMethod === 'cash' 
+                    ? parseFloat(receivedAmount || 0) - getTotalPrice() 
+                    : 0;
+
+                if (paymentMethod === 'cash' && change < 0) {
+                    setToast({ message: 'จำนวนเงินที่รับมาไม่พอ', type: 'error' });
+                    return;
+                }
+
+                setProcessing(true);
+
+                const orderData = {
+                    items: cart,
+                    total: getTotalPrice(),
+                    paymentMethod,
+                    receivedAmount: paymentMethod === 'cash' ? parseFloat(receivedAmount) : getTotalPrice(),
+                    change
+                };
+
+                const result = await DatabaseService.createOrder(orderData, user.id);
+
+                if (result.success) {
+                    setToast({ 
+                        message: `การขายสำเร็จ! ${paymentMethod === 'cash' ? `เงินทอน: ${change.toFixed(2)} บาท` : ''}`, 
+                        type: 'success' 
+                    });
+                    
+                    setCart([]);
+                    setShowPayment(false);
+                    setReceivedAmount('');
+                    setPaymentMethod('cash');
+                } else {
+                    setToast({ message: 'เกิดข้อผิดพลาด: ' + result.error, type: 'error' });
+                }
+
+                setProcessing(false);
+            };
+
+            // Enhanced Customization Modal
+            const CustomizationModal = () => {
+                if (!selectedItem) return null;
+
+                const [tempItem, setTempItem] = useState(selectedItem);
+
+                const toggleAddon = (addon) => {
+                    const existing = tempItem.selectedAddons.find(a => a.id === addon.id);
+                    if (existing) {
+                        setTempItem({
+                            ...tempItem,
+                            selectedAddons: tempItem.selectedAddons.filter(a => a.id !== addon.id)
+                        });
+                    } else {
+                        setTempItem({
+                            ...tempItem,
+                            selectedAddons: [...tempItem.selectedAddons, addon]
+                        });
+                    }
+                };
+
+                const totalPrice = calculateItemPrice(tempItem);
+
+                // Group addons by category
+                const groupedAddons = addons.reduce((acc, addon) => {
+                    if (!acc[addon.category]) {
+                        acc[addon.category] = [];
+                    }
+                    acc[addon.category].push(addon);
+                    return acc;
+                }, {});
+
+                return (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                        <div className="bg-white rounded-xl p-6 max-w-md w-full m-4 max-h-[90vh] overflow-y-auto">
+                            <h3 className="text-xl font-bold mb-4">
+                                {tempItem.image} {tempItem.name}
+                            </h3>
+
+                            {/* Temperature Selection */}
+                            {tempItem.allow_temperature !== false && tempItem.category !== 'bakery' && (
+                                <div className="mb-4">
+                                    <label className="block text-sm font-medium mb-2">อุณหภูมิ</label>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button
+                                            onClick={() => setTempItem({...tempItem, temperature: 'hot'})}
+                                            className={`py-2 rounded-lg border-2 transition-all ${
+                                                tempItem.temperature === 'hot'
+                                                    ? 'border-red-500 bg-red-50'
+                                                    : 'border-gray-200 hover:border-gray-300'
+                                            }`}
+                                        >
+                                            🔥 ร้อน
+                                        </button>
+                                        <button
+                                            onClick={() => setTempItem({...tempItem, temperature: 'cold'})}
+                                            className={`py-2 rounded-lg border-2 transition-all ${
+                                                tempItem.temperature === 'cold'
+                                                    ? 'border-blue-500 bg-blue-50'
+                                                    : 'border-gray-200 hover:border-gray-300'
+                                            }`}
+                                        >
+                                            ❄️ เย็น (+5฿)
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Size Selection */}
+                            {tempItem.allow_size && (
+                                <div className="mb-4">
+                                    <label className="block text-sm font-medium mb-2">ขนาด</label>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {['S', 'M', 'L'].map(size => (
+                                            <button
+                                                key={size}
+                                                onClick={() => setTempItem({...tempItem, size})}
+                                                className={`py-2 rounded-lg border-2 transition-all ${
+                                                    tempItem.size === size
+                                                        ? 'border-amber-500 bg-amber-50'
+                                                        : 'border-gray-200 hover:border-gray-300'
+                                                }`}
+                                            >
+                                                {size}
+                                                {size === 'L' && ' (+10฿)'}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Sweetness Selection */}
+                            {tempItem.allow_sweetness && (
+                                <div className="mb-4">
+                                    <label className="block text-sm font-medium mb-2">ความหวาน</label>
+                                    <select
+                                        value={tempItem.sweetness}
+                                        onChange={(e) => setTempItem({...tempItem, sweetness: e.target.value})}
+                                        className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:border-amber-500"
+                                    >
+                                        <option value="0%">0% - ไม่หวาน</option>
+                                        <option value="25%">25% - หวานน้อย</option>
+                                        <option value="50%">50% - หวานกลาง</option>
+                                        <option value="75%">75% - หวานมาก</option>
+                                        <option value="100%">100% - หวานปกติ</option>
+                                    </select>
+                                </div>
+                            )}
+
+                            {/* Grouped Addons */}
+                            {tempItem.allow_addons && Object.keys(groupedAddons).length > 0 && (
+                                <div className="mb-4">
+                                    <label className="block text-sm font-medium mb-2">เพิ่มเติม</label>
+                                    {Object.entries(groupedAddons).map(([category, categoryAddons]) => (
+                                        <div key={category} className="mb-3">
+                                            <h4 className="text-xs font-semibold text-gray-600 mb-1 uppercase">
+                                                {category === 'topping' ? 'ท็อปปิ้ง' :
+                                                 category === 'syrup' ? 'ไซรัป' :
+                                                 category === 'extra' ? 'เพิ่มพิเศษ' :
+                                                 category === 'sweetener' ? 'สารให้ความหวาน' : category}
+                                            </h4>
+                                            <div className="space-y-1">
+                                                {categoryAddons.map(addon => (
+                                                    <label
+                                                        key={addon.id}
+                                                        className="flex items-center justify-between p-2 border rounded-lg hover:bg-gray-50 cursor-pointer"
+                                                    >
+                                                        <div className="flex items-center">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={tempItem.selectedAddons.some(a => a.id === addon.id)}
+                                                                onChange={() => toggleAddon(addon)}
+                                                                className="mr-3"
+                                                            />
+                                                            <span className="text-sm">{addon.name}</span>
+                                                        </div>
+                                                        <span className="text-amber-600 text-sm">+{parseFloat(addon.price).toFixed(0)}฿</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Total */}
+                            <div className="border-t pt-4 mb-4">
+                                <div className="flex justify-between text-lg font-bold">
+                                    <span>ราคารวม:</span>
+                                    <span className="text-amber-600">฿{totalPrice.toFixed(2)}</span>
+                                </div>
+                            </div>
+
+                            {/* Buttons */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <button
+                                    onClick={() => {
+                                        setShowCustomization(false);
+                                        setSelectedItem(null);
+                                    }}
+                                    className="py-2 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors"
+                                >
+                                    ยกเลิก
+                                </button>
+                                <button
+                                    onClick={() => addToCart(tempItem)}
+                                    className="py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                                >
+                                    เพิ่มลงตะกร้า
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-full">
+                    {toast && (
+                        <Toast 
+                            message={toast.message} 
+                            type={toast.type} 
+                            onClose={() => setToast(null)} 
+                        />
+                    )}
+
+                    {showCustomization && <CustomizationModal />}
+
+                    {/* Menu Section */}
+                    <div className="lg:col-span-2 bg-white rounded-lg shadow-lg p-4">
+                        {/* Categories */}
+                        <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-hide">
+                            <button
+                                onClick={() => setSelectedCategory('all')}
+                                className={`px-4 py-2 rounded-lg whitespace-nowrap transition-all ${
+                                    selectedCategory === 'all'
+                                        ? 'bg-amber-600 text-white shadow-lg transform scale-105'
+                                        : 'bg-gray-100 hover:bg-gray-200'
+                                }`}
+                            >
+                                <span className="mr-2">📋</span>
+                                ทั้งหมด
+                            </button>
+                            {categories.map(cat => (
+                                <button
+                                    key={cat.id}
+                                    onClick={() => setSelectedCategory(cat.code)}
+                                    className={`px-4 py-2 rounded-lg whitespace-nowrap transition-all ${
+                                        selectedCategory === cat.code
+                                            ? 'bg-amber-600 text-white shadow-lg transform scale-105'
+                                            : 'bg-gray-100 hover:bg-gray-200'
+                                    }`}
+                                >
+                                    <span className="mr-2">{cat.icon}</span>
+                                    {cat.name}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Menu Grid */}
+                        {loading ? (
+                            <div className="flex items-center justify-center py-8">
+                                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-600"></div>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 overflow-y-auto" 
+                                 style={{maxHeight: 'calc(100vh - 250px)'}}>
+                                {filteredItems.map(item => (
+                                    <button
+                                        key={item.id}
+                                        onClick={() => handleItemClick(item)}
+                                        className="bg-white border-2 border-gray-200 rounded-lg p-4 hover:border-amber-500 hover:shadow-lg transition-all transform hover:scale-105"
+                                    >
+                                        <div className="text-3xl mb-2">{item.image}</div>
+                                        <div className="font-medium text-sm">{item.name}</div>
+                                        <div className="text-amber-600 font-bold">฿{parseFloat(item.price).toFixed(2)}</div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Cart Section */}
+                    <div className="bg-white rounded-lg shadow-lg p-4 flex flex-col">
+                        <h3 className="text-xl font-bold mb-4 text-gray-800">
+                            <i className="fas fa-shopping-cart mr-2"></i>
+                            รายการสั่งซื้อ
+                        </h3>
+
+                        {/* Cart Items */}
+                        <div className="flex-1 overflow-y-auto space-y-2 mb-4">
+                            {cart.length === 0 ? (
+                                <div className="text-center text-gray-400 py-8">
+                                    <i className="fas fa-coffee text-4xl mb-2"></i>
+                                    <p>ยังไม่มีรายการ</p>
+                                </div>
+                            ) : (
+                                cart.map(item => (
+                                    <div key={item.cartId} className="border rounded-lg p-3 hover:shadow-md transition-shadow">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div className="flex-1">
+                                                <div className="font-medium">{item.name}</div>
+                                                <div className="text-sm text-gray-500">
+                                                    {item.temperature && item.temperature === 'hot' ? '🔥 ร้อน' : '❄️ เย็น'}
+                                                    {item.size && ` | Size: ${item.size}`}
+                                                    {item.sweetness && ` | หวาน: ${item.sweetness}`}
+                                                </div>
+                                                {item.addons && item.addons.length > 0 && (
+                                                    <div className="text-xs text-amber-600 mt-1">
+                                                        + {item.addons.map(a => a.name).join(', ')}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <button
+                                                onClick={() => removeFromCart(item.cartId)}
+                                                className="text-red-500 hover:text-red-700 ml-2"
+                                            >
+                                                <i className="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+
+                                        {/* Quantity & Price */}
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => updateCartItem(item.cartId, { 
+                                                        quantity: Math.max(1, item.quantity - 1) 
+                                                    })}
+                                                    className="w-7 h-7 bg-gray-200 rounded hover:bg-gray-300"
+                                                >
+                                                    -
+                                                </button>
+                                                <span className="w-8 text-center font-medium">{item.quantity}</span>
+                                                <button
+                                                    onClick={() => updateCartItem(item.cartId, { 
+                                                        quantity: item.quantity + 1 
+                                                    })}
+                                                    className="w-7 h-7 bg-gray-200 rounded hover:bg-gray-300"
+                                                >
+                                                    +
+                                                </button>
+                                            </div>
+                                            <span className="font-bold text-amber-600">
+                                                ฿{item.subtotal.toFixed(2)}
+                                            </span>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+
+                        {/* Total & Payment */}
+                        <div className="border-t pt-4">
+                            <div className="flex justify-between text-xl font-bold mb-4">
+                                <span>รวมทั้งหมด:</span>
+                                <span className="text-amber-600">฿{getTotalPrice().toFixed(2)}</span>
+                            </div>
+
+                            {!showPayment ? (
+                                <button
+                                    onClick={() => setShowPayment(true)}
+                                    disabled={cart.length === 0}
+                                    className={`w-full py-3 rounded-lg font-medium transition-all ${
+                                        cart.length > 0
+                                            ? 'bg-amber-600 text-white hover:bg-amber-700'
+                                            : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                    }`}
+                                >
+                                    <i className="fas fa-credit-card mr-2"></i>
+                                    ชำระเงิน
+                                </button>
+                            ) : (
+                                <div className="space-y-3">
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button
+                                            onClick={() => setPaymentMethod('cash')}
+                                            className={`py-2 rounded-lg transition-all ${
+                                                paymentMethod === 'cash'
+                                                    ? 'bg-green-600 text-white'
+                                                    : 'bg-gray-200 hover:bg-gray-300'
+                                            }`}
+                                        >
+                                            <i className="fas fa-money-bill mr-1"></i>
+                                            เงินสด
+                                        </button>
+                                        <button
+                                            onClick={() => setPaymentMethod('qr')}
+                                            className={`py-2 rounded-lg transition-all ${
+                                                paymentMethod === 'qr'
+                                                    ? 'bg-blue-600 text-white'
+                                                    : 'bg-gray-200 hover:bg-gray-300'
+                                            }`}
+                                        >
+                                            <i className="fas fa-qrcode mr-1"></i>
+                                            QR
+                                        </button>
+                                    </div>
+
+                                    {paymentMethod === 'cash' && (
+                                        <input
+                                            type="number"
+                                            placeholder="จำนวนเงินที่รับ"
+                                            value={receivedAmount}
+                                            onChange={(e) => setReceivedAmount(e.target.value)}
+                                            className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:border-amber-500"
+                                        />
+                                    )}
+
+                                    {paymentMethod === 'cash' && receivedAmount && (
+                                        <div className="text-center bg-gray-50 py-2 rounded">
+                                            <span className="text-gray-600">เงินทอน: </span>
+                                            <span className="font-bold text-lg text-green-600">
+                                                ฿{Math.max(0, parseFloat(receivedAmount) - getTotalPrice()).toFixed(2)}
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button
+                                            onClick={() => setShowPayment(false)}
+                                            disabled={processing}
+                                            className="py-2 bg-gray-300 rounded-lg hover:bg-gray-400"
+                                        >
+                                            ยกเลิก
+                                        </button>
+                                        <button
+                                            onClick={handlePayment}
+                                            disabled={processing}
+                                            className={`py-2 rounded-lg ${
+                                                processing 
+                                                    ? 'bg-gray-400 cursor-not-allowed' 
+                                                    : 'bg-green-600 text-white hover:bg-green-700'
+                                            }`}
+                                        >
+                                            {processing ? (
+                                                <i className="fas fa-spinner fa-spin"></i>
+                                            ) : (
+                                                'ยืนยัน'
+                                            )}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Component: Category Management
+        const CategoryManagement = () => {
+            const [categories, setCategories] = useState([]);
+            const [editingCategory, setEditingCategory] = useState(null);
+            const [showForm, setShowForm] = useState(false);
+            const [loading, setLoading] = useState(true);
+            const [toast, setToast] = useState(null);
+
+            const [formData, setFormData] = useState({
+                name: '',
+                code: '',
+                icon: '',
+                display_order: 1
+            });
+
+            useEffect(() => {
+                loadCategories();
+            }, []);
+
+            const loadCategories = async () => {
+                setLoading(true);
+                const data = await DatabaseService.getCategories();
+                setCategories(data);
+                setLoading(false);
+            };
+
+            const handleSave = async () => {
+                if (!formData.name || !formData.code) {
+                    setToast({ message: 'กรุณากรอกข้อมูลให้ครบ', type: 'error' });
+                    return;
+                }
+
+                const categoryData = {
+                    ...formData,
+                    display_order: parseInt(formData.display_order)
+                };
+
+                if (editingCategory) {
+                    categoryData.id = editingCategory.id;
+                }
+
+                const result = await DatabaseService.saveCategory(categoryData);
+
+                if (result.success) {
