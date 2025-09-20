@@ -70,43 +70,47 @@
                 console.error("Supabase initialization failed:", error);
             }
 
-            const createApi = (tableName) => ({
-                async getAll(orderBy = 'display_order', ascending = true) {
-                    if (!supabaseClient) return [];
-                    const { data, error } = await supabaseClient
-                        .from(tableName)
-                        .select('*')
-                        .eq('is_active', true)
-                        .order(orderBy, { ascending });
-                    if (error) console.error(`Error fetching ${tableName}:`, error);
-                    return data || [];
-                },
-                async add(item) {
-                    if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
-                    const { id, ...insertData } = item;
-                    const { data, error } = await supabaseClient
-                        .from(tableName)
-                        .insert([insertData])
-                        .select();
-                    if (error) return { success: false, error };
-                    return { success: true, data: data[0] };
-                },
-                async update(id, updates) {
-                    if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
-                    const { id: _, ...updateData } = updates;
-                    const { data, error } = await supabaseClient
-                        .from(tableName)
-                        .update(updateData)
-                        .eq('id', id)
-                        .select();
-                    if (error) return { success: false, error };
-                    return { success: true, data: data[0] };
-                },
-                // FIX: Changed to regular function to get correct 'this' context
-                async remove(id) { // Soft delete
-                    return this.update(id, { is_active: false });
-                }
-            });
+            const createApi = (tableName) => {
+                const apiMethods = {
+                    async getAll(orderBy = 'display_order', ascending = true) {
+                        if (!supabaseClient) return [];
+                        const { data, error } = await supabaseClient
+                            .from(tableName)
+                            .select('*')
+                            .eq('is_active', true)
+                            .order(orderBy, { ascending });
+                        if (error) console.error(`Error fetching ${tableName}:`, error);
+                        return data || [];
+                    },
+                    async add(item) {
+                        if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
+                        const { id, ...insertData } = item;
+                        const { data, error } = await supabaseClient
+                            .from(tableName)
+                            .insert([insertData])
+                            .select();
+                        if (error) return { success: false, error };
+                        return { success: true, data: data[0] };
+                    },
+                    async update(id, updates) {
+                        if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
+                        const { id: _, ...updateData } = updates;
+                        const { data, error } = await supabaseClient
+                            .from(tableName)
+                            .update(updateData)
+                            .eq('id', id)
+                            .select();
+                        if (error) return { success: false, error };
+                        return { success: true, data: data[0] };
+                    }
+                };
+                
+                apiMethods.remove = async (id) => { // Soft delete
+                    return apiMethods.update(id, { is_active: false });
+                };
+
+                return apiMethods;
+            };
 
             const categoriesApi = createApi('categories');
             const menuItemsApi = createApi('menu_items');
