@@ -93,9 +93,10 @@
                 },
                 async update(id, updates) {
                     if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
+                    const { id: _, ...updateData } = updates; // FIX: Exclude id from the update payload
                     const { data, error } = await supabaseClient
                         .from(tableName)
-                        .update(updates)
+                        .update(updateData)
                         .eq('id', id)
                         .select();
                     if (error) return { success: false, error };
