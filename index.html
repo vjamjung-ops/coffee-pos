@@ -59,12 +59,12 @@
             const SUPABASE_URL = 'https://qgiwhwqtvyxnoyldzttv.supabase.co'; // <--- ใส่ URL ของคุณที่นี่
             const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFnaXdod3F0dnl4bm95bGR6dHR2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgzNzAwNDgsImV4cCI6MjA3Mzk0NjA0OH0.9wvtVPUF1Jl0HyAbgXmL77gFSzQlVencCTx-IGM8D5Y'; // <--- ใส่ Anon Key ของคุณที่นี่
 
-            let supabase;
+            let supabaseClient;
             try {
-                 if (SUPABASE_URL && SUPABASE_URL !== 'YOUR_SUPABASE_URL' && SUPABASE_ANON_KEY && SUPABASE_ANON_KEY !== 'YOUR_SUPABASE_ANON_KEY') {
-                    supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                 if (SUPABASE_URL && SUPABASE_URL !== 'YOUR_SUPABASE_URL' && SUPABASE_ANON_KEY && SUPABASE_ANON_KEY !== 'YOUR_SUPABASE_ANON_KEY' && supabase) {
+                    supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
                  } else {
-                    console.warn("Supabase credentials not provided. Application will not connect to a database.");
+                    console.warn("Supabase credentials not provided or Supabase client not loaded. Application will not connect to a database.");
                  }
             } catch (error) {
                 console.error("Supabase initialization failed:", error);
@@ -72,8 +72,8 @@
 
             const createApi = (tableName) => ({
                 async getAll(orderBy = 'display_order') {
-                    if (!supabase) return [];
-                    const { data, error } = await supabase
+                    if (!supabaseClient) return [];
+                    const { data, error } = await supabaseClient
                         .from(tableName)
                         .select('*')
                         .eq('is_active', true)
@@ -82,9 +82,9 @@
                     return data || [];
                 },
                 async add(item) {
-                    if (!supabase) return { success: false, error: 'Supabase not configured' };
+                    if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
                     const { id, ...insertData } = item;
-                    const { data, error } = await supabase
+                    const { data, error } = await supabaseClient
                         .from(tableName)
                         .insert([insertData])
                         .select();
@@ -92,8 +92,8 @@
                     return { success: true, data: data[0] };
                 },
                 async update(id, updates) {
-                    if (!supabase) return { success: false, error: 'Supabase not configured' };
-                    const { data, error } = await supabase
+                    if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
+                    const { data, error } = await supabaseClient
                         .from(tableName)
                         .update(updates)
                         .eq('id', id)
@@ -133,8 +133,8 @@
                 deleteOption: optionsApi.remove,
 
                 async createOrder(orderData, userId) {
-                    if (!supabase) return { success: false, error: 'Supabase not configured' };
-                    const { data, error } = await supabase
+                    if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
+                    const { data, error } = await supabaseClient
                         .from('orders')
                         .insert([{ ...orderData, user_id: userId, order_items: orderData.items }])
                         .select();
@@ -143,13 +143,13 @@
                 },
                 
                 async getOrders(date) {
-                    if (!supabase) return [];
+                    if (!supabaseClient) return [];
                     const startDate = new Date(date);
                     startDate.setHours(0, 0, 0, 0);
                     const endDate = new Date(date);
                     endDate.setHours(23, 59, 59, 999);
 
-                    const { data, error } = await supabase
+                    const { data, error } = await supabaseClient
                         .from('orders')
                         .select('*')
                         .gte('created_at', startDate.toISOString())
@@ -161,8 +161,8 @@
                 },
 
                 async updateOrder(orderId, updates) {
-                     if (!supabase) return { success: false, error: 'Supabase not configured' };
-                    const { data, error } = await supabase.from('orders').update(updates).eq('id', orderId).select();
+                     if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
+                    const { data, error } = await supabaseClient.from('orders').update(updates).eq('id', orderId).select();
                     return error ? { success: false, error } : { success: true, data: data[0] };
                 },
 
@@ -171,9 +171,9 @@
                 },
 
                 async getTodaysCashDrawer() {
-                    if (!supabase) return null;
+                    if (!supabaseClient) return null;
                     const today = new Date().toISOString().slice(0, 10);
-                    const { data, error } = await supabase
+                    const { data, error } = await supabaseClient
                         .from('cash_drawer')
                         .select('*')
                         .gte('open_time', `${today}T00:00:00.000Z`)
@@ -186,11 +186,11 @@
                 },
 
                 async openCashDrawer(userId, initialAmount) {
-                     if (!supabase) return { success: false, error: 'Supabase not configured' };
+                     if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
                     const existing = await this.getTodaysCashDrawer();
-                    if (existing && !existing.is_closed) return { success: false, error: 'ลิ้นชักถูกเปิดแล้ววันนี้' };
+                    if (existing && !existing.is_closed) return { success: false, error: { message: 'ลิ้นชักถูกเปิดแล้ววันนี้' } };
 
-                    const { data, error } = await supabase
+                    const { data, error } = await supabaseClient
                         .from('cash_drawer')
                         .insert([{ opening_amount: initialAmount, user_id: userId }])
                         .select();
@@ -198,23 +198,23 @@
                 },
                 
                 async closeCashDrawer(drawerId, closingAmount, userId) {
-                    if (!supabase) return { success: false, error: 'Supabase not configured' };
+                    if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
                     const updates = { 
                         closing_amount: closingAmount, 
                         closing_user_id: userId, 
                         is_closed: true,
                         close_time: new Date().toISOString()
                     };
-                    const { data, error } = await supabase.from('cash_drawer').update(updates).eq('id', drawerId).select();
+                    const { data, error } = await supabaseClient.from('cash_drawer').update(updates).eq('id', drawerId).select();
                     return error ? { success: false, error } : { success: true, data: data[0] };
                 },
 
                 async getCashDrawerSummary(drawerId) {
-                     if (!supabase) return {};
-                    const { data: drawerData, error: drawerError } = await supabase.from('cash_drawer').select('*').eq('id', drawerId).single();
+                     if (!supabaseClient) return {};
+                    const { data: drawerData, error: drawerError } = await supabaseClient.from('cash_drawer').select('*').eq('id', drawerId).single();
                     if (drawerError) return { error: drawerError };
 
-                    const { data, error } = await supabase
+                    const { data, error } = await supabaseClient
                         .from('orders')
                         .select('total')
                         .gte('created_at', drawerData.open_time)
@@ -233,8 +233,8 @@
                 },
                 
                 async getSalesReport(startDate, endDate) {
-                     if (!supabase) return { orders: [] };
-                    const { data, error } = await supabase
+                     if (!supabaseClient) return { orders: [] };
+                    const { data, error } = await supabaseClient
                         .from('orders')
                         .select('*')
                         .gte('created_at', startDate.toISOString())
@@ -655,6 +655,8 @@
                 if (result.success) {
                     setToast({ message: `ขายสำเร็จ! ${paymentMethod === 'cash' ? `เงินทอน: ฿${change.toFixed(2)}` : ''}`, type: 'success' });
                     setCart([]); setShowPayment(false); setReceivedAmount(''); setPaymentMethod('cash');
+                } else {
+                    setToast({ message: `เกิดข้อผิดพลาด: ${result.error?.message || 'Unknown error'}`, type: 'error' });
                 }
             };
             
@@ -733,7 +735,7 @@
             const handleOpen = async () => {
                 const result = await DatabaseService.openCashDrawer(user.id, parseFloat(openAmount));
                 if (result.success) { setToast({ message: 'เปิดลิ้นชักสำเร็จ', type: 'success' }); await checkDrawer(); }
-                else { setToast({ message: result.error, type: 'error' }); }
+                else { setToast({ message: result.error.message, type: 'error' }); }
             };
 
             const handleClose = async () => {
