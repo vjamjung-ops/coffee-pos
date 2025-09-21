@@ -222,9 +222,13 @@
                 },
 
                 async getCashDrawerSummary(drawerId) {
-                     if (!supabaseClient) return {};
+                    if (!supabaseClient) return null;
                     const { data: drawerData, error: drawerError } = await supabaseClient.from('cash_drawer').select('*').eq('id', drawerId).single();
-                    if (drawerError) return { error: drawerError };
+                    
+                    if (drawerError || !drawerData) {
+                        console.error("Could not get drawer data for summary", drawerError);
+                        return null;
+                    }
 
                     const { data, error } = await supabaseClient
                         .from('orders')
@@ -234,7 +238,10 @@
                         .eq('paymentMethod', 'cash')
                         .eq('is_deleted', false);
                     
-                    if (error) return { error };
+                    if (error) {
+                        console.error("Error fetching orders for cash drawer summary", error);
+                        return null;
+                    }
 
                     const cashSales = data.reduce((sum, o) => sum + o.total, 0);
                     return {
@@ -261,9 +268,9 @@
         const AuthContext = createContext(null);
 
         const AuthProvider = ({ children }) => {
-            const [user, setUser] = useState({ id: 1, name: 'Demo Admin', role: 'admin', email: 'admin@coffee.shop' });
+            const [user, setUser] = useState({ id: '1', name: 'Demo Admin', role: 'admin', email: 'admin@coffee.shop' });
             const [loading, setLoading] = useState(false);
-            const login = async (email, password) => setUser({ id: 1, name: 'Demo Admin', role: 'admin', email });
+            const login = async (email, password) => setUser({ id: '1', name: 'Demo Admin', role: 'admin', email });
             const logout = () => setUser(null);
             return <AuthContext.Provider value={{ user, login, logout, loading }}>{children}</AuthContext.Provider>;
         };
@@ -858,7 +865,8 @@
                 const currentDrawer = await DatabaseService.getTodaysCashDrawer();
                 setDrawer(currentDrawer);
                 if (currentDrawer && !currentDrawer.is_closed) {
-                    setSummary(await DatabaseService.getCashDrawerSummary(currentDrawer.id));
+                    const summaryData = await DatabaseService.getCashDrawerSummary(currentDrawer.id);
+                    setSummary(summaryData);
                 }
                 setLoading(false);
             };
