@@ -785,27 +785,55 @@
 
             const getSuggestedAmounts = (total) => {
                 if (total <= 0) return [];
-                const bills = [1000, 500, 100, 50, 20];
                 const suggestions = new Set();
-                
-                // Exact amount
-                suggestions.add(Math.ceil(total));
+                const ceiledTotal = Math.ceil(total);
 
-                // Next bills
-                for (const bill of bills) {
-                    if (total < bill) {
+                suggestions.add(ceiledTotal);
+
+                const bills = [20, 50, 100, 500];
+                bills.forEach(bill => {
+                    if (bill > ceiledTotal) {
                         suggestions.add(bill);
                     }
+                });
+
+                if (ceiledTotal > 10 && ceiledTotal % 10 !== 0) {
+                     suggestions.add(Math.ceil(ceiledTotal / 10) * 10);
                 }
-                
-                // Next tens
-                if (total > 10 && total % 10 !== 0) {
-                     suggestions.add(Math.ceil(total / 10) * 10);
+                 if (ceiledTotal > 100 && ceiledTotal % 100 !== 0) {
+                    suggestions.add(Math.ceil(ceiledTotal / 100) * 100);
                 }
 
-                return Array.from(suggestions).sort((a,b) => a - b).slice(0, 5);
+                return Array.from(suggestions)
+                    .filter(s => s >= ceiledTotal)
+                    .sort((a,b) => a-b)
+                    .slice(0, 3);
             };
 
+            const Numpad = ({ onInput, onClear, onBackspace }) => {
+                const keys = [ '1', '2', '3', '4', '5', '6', '7', '8', '9', 'C', '0', '<' ];
+                return (
+                    <div className="grid grid-cols-3 gap-2 mt-2">
+                        {keys.map(key => {
+                            const isAction = key === 'C' || key === '<';
+                            const action = key === 'C' ? onClear : key === '<' ? onBackspace : () => onInput(key);
+                            return (
+                                <button 
+                                    key={key} 
+                                    onClick={action}
+                                    className={`py-3 rounded-lg text-xl font-bold ${isAction ? 'bg-orange-500 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
+                                >
+                                    {key === '<' ? <i className="fas fa-backspace"></i> : key}
+                                </button>
+                            );
+                        })}
+                    </div>
+                );
+            };
+
+            const handleNumpadInput = (value) => setReceivedAmount(prev => prev + value);
+            const handleNumpadClear = () => setReceivedAmount('');
+            const handleNumpadBackspace = () => setReceivedAmount(prev => prev.slice(0, -1));
             
             const CustomizationModal = () => {
                 if (!selectedItem) return null;
@@ -878,11 +906,16 @@
                                             <button key={amount} onClick={() => setReceivedAmount(amount)} className="py-2 bg-gray-100 rounded-lg hover:bg-gray-200">฿{amount}</button>
                                         ))}
                                     </div>
-                                    <input type="number" placeholder="รับเงิน" value={receivedAmount} onChange={e => setReceivedAmount(e.target.value)} className="w-full p-2 border rounded-lg"/>
+                                    <input type="number" placeholder="รับเงิน" value={receivedAmount} readOnly className="w-full p-2 border rounded-lg text-center text-lg bg-gray-50"/>
+                                    <Numpad
+                                        onInput={handleNumpadInput}
+                                        onClear={handleNumpadClear}
+                                        onBackspace={handleNumpadBackspace}
+                                    />
                                     {receivedAmount && <div className="text-center"><span>ทอน: </span><span className="font-bold text-lg text-green-600">฿{Math.max(0, parseFloat(receivedAmount) - getTotalPrice()).toFixed(2)}</span></div>}
                                 </>
                             )}
-                            <div className="grid grid-cols-2 gap-2"><button onClick={() => setShowPayment(false)} className="py-2 bg-gray-300 rounded-lg">ยกเลิก</button><button onClick={handlePayment} className="py-2 bg-green-600 text-white rounded-lg">ยืนยัน</button></div>
+                            <div className="grid grid-cols-2 gap-2"><button onClick={() => {setShowPayment(false); setReceivedAmount('');}} className="py-2 bg-gray-300 rounded-lg">ยกเลิก</button><button onClick={handlePayment} className="py-2 bg-green-600 text-white rounded-lg">ยืนยัน</button></div>
                         </div>}
                     </div>
                 </div>
@@ -1210,7 +1243,4 @@
     </script>
 </body>
 </html>
-"
--หน้าชำระเงิน ในส่วนตัวเลขขึ้นอัตโนมัติ ให้คำนวณจากยอดรวมที่ต้องชำระเงิน ให้คำนวณความน่าจะเป็นที่คนต้องจ่าย เช่น ยอดชำระเงิน 60 บาท ให้คำนวณแล้วขึ้นจำนวนเงินที่ใกล้เคียง เช่น 60 ,100 ,500 เป็นต้น 
-คือให้
 
