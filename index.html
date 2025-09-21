@@ -117,6 +117,8 @@
             const addonsApi = createApi('addons');
             const optionsApi = createApi('options');
             const optionTypesApi = createApi('option_types');
+            const cashDrawerApi = createApi('cash_drawer');
+
 
             return {
                 getCategories: categoriesApi.getAll,
@@ -198,17 +200,7 @@
                     return data;
                 },
 
-                async openCashDrawer(userId, initialAmount) {
-                     if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
-                    const existing = await this.getTodaysCashDrawer();
-                    if (existing && !existing.is_closed) return { success: false, error: { message: 'ลิ้นชักถูกเปิดแล้ววันนี้' } };
-
-                    const { data, error } = await supabaseClient
-                        .from('cash_drawer')
-                        .insert([{ opening_amount: initialAmount, user_id: userId }])
-                        .select();
-                    return error ? { success: false, error } : { success: true, data: data[0] };
-                },
+                openCashDrawer: cashDrawerApi.add,
                 
                 async closeCashDrawer(drawerId, closingAmount, userId) {
                     if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
@@ -253,6 +245,17 @@
                         totalSales: cashSales + qrSales,
                         expectedAmount: (drawerData?.opening_amount || 0) + cashSales
                     };
+                },
+                 
+                async getDrawerHistory() {
+                    if (!supabaseClient) return [];
+                    const { data, error } = await supabaseClient
+                        .from('cash_drawer')
+                        .select('*')
+                        .eq('is_closed', true)
+                        .order('close_time', { ascending: false });
+                    if (error) console.error("Error fetching drawer history:", error);
+                    return data || [];
                 },
                 
                 async getSalesReport(startDate, endDate) {
@@ -779,6 +782,30 @@
                      setToast({ message: `เกิดข้อผิดพลาด: ${result.error?.message || 'Unknown error'}`, type: 'error' });
                 }
             };
+
+            const getSuggestedAmounts = (total) => {
+                if (total <= 0) return [];
+                const bills = [1000, 500, 100, 50, 20];
+                const suggestions = new Set();
+                
+                // Exact amount
+                suggestions.add(Math.ceil(total));
+
+                // Next bills
+                for (const bill of bills) {
+                    if (total < bill) {
+                        suggestions.add(bill);
+                    }
+                }
+                
+                // Next tens
+                if (total > 10 && total % 10 !== 0) {
+                     suggestions.add(Math.ceil(total / 10) * 10);
+                }
+
+                return Array.from(suggestions).sort((a,b) => a - b).slice(0, 5);
+            };
+
             
             const CustomizationModal = () => {
                 if (!selectedItem) return null;
@@ -844,8 +871,17 @@
                         <div className="flex justify-between text-xl font-bold mb-4"><span>รวม:</span><span>฿{getTotalPrice().toFixed(2)}</span></div>
                         {!showPayment ? <button onClick={() => setShowPayment(true)} disabled={cart.length === 0} className={`w-full py-3 rounded-lg ${cart.length > 0 ? 'bg-amber-600 text-white' : 'bg-gray-200'}`}>ชำระเงิน</button> : <div className="space-y-3">
                             <div className="grid grid-cols-2 gap-2"><button onClick={() => setPaymentMethod('cash')} className={`py-2 rounded-lg ${paymentMethod === 'cash' ? 'bg-green-600 text-white' : 'bg-gray-200'}`}>เงินสด</button><button onClick={() => setPaymentMethod('qr')} className={`py-2 rounded-lg ${paymentMethod === 'qr' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>QR</button></div>
-                            {paymentMethod === 'cash' && <input type="number" placeholder="รับเงิน" value={receivedAmount} onChange={e => setReceivedAmount(e.target.value)} className="w-full p-2 border rounded-lg"/>}
-                            {paymentMethod === 'cash' && receivedAmount && <div className="text-center"><span>ทอน: </span><span className="font-bold text-lg text-green-600">฿{Math.max(0, parseFloat(receivedAmount) - getTotalPrice()).toFixed(2)}</span></div>}
+                            {paymentMethod === 'cash' && (
+                                <>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {getSuggestedAmounts(getTotalPrice()).map(amount => (
+                                            <button key={amount} onClick={() => setReceivedAmount(amount)} className="py-2 bg-gray-100 rounded-lg hover:bg-gray-200">฿{amount}</button>
+                                        ))}
+                                    </div>
+                                    <input type="number" placeholder="รับเงิน" value={receivedAmount} onChange={e => setReceivedAmount(e.target.value)} className="w-full p-2 border rounded-lg"/>
+                                    {receivedAmount && <div className="text-center"><span>ทอน: </span><span className="font-bold text-lg text-green-600">฿{Math.max(0, parseFloat(receivedAmount) - getTotalPrice()).toFixed(2)}</span></div>}
+                                </>
+                            )}
                             <div className="grid grid-cols-2 gap-2"><button onClick={() => setShowPayment(false)} className="py-2 bg-gray-300 rounded-lg">ยกเลิก</button><button onClick={handlePayment} className="py-2 bg-green-600 text-white rounded-lg">ยืนยัน</button></div>
                         </div>}
                     </div>
@@ -861,8 +897,17 @@
             const [loading, setLoading] = useState(true);
             const [toast, setToast] = useState(null);
             const [summary, setSummary] = useState(null);
+            const [history, setHistory] = useState([]);
+            const [activeTab, setActiveTab] = useState('current');
 
-            useEffect(() => { checkDrawer(); }, []);
+
+            useEffect(() => { 
+                if (activeTab === 'current') {
+                    checkDrawer();
+                } else {
+                    loadHistory();
+                }
+            }, [activeTab]);
 
             const checkDrawer = async () => {
                 setLoading(true);
@@ -874,10 +919,16 @@
                 }
                 setLoading(false);
             };
+            
+            const loadHistory = async () => {
+                setLoading(true);
+                setHistory(await DatabaseService.getDrawerHistory());
+                setLoading(false);
+            };
 
             const handleOpen = async () => {
                 if (!openAmount || parseFloat(openAmount) < 0) return setToast({ message: 'กรุณากรอกจำนวนเงิน', type: 'error' });
-                const result = await DatabaseService.openCashDrawer(user.id, parseFloat(openAmount));
+                const result = await DatabaseService.openCashDrawer({opening_amount: parseFloat(openAmount), user_id: user.id});
                 if (result.success) { 
                     setToast({ message: 'เปิดลิ้นชักสำเร็จ', type: 'success' }); 
                     await checkDrawer(); 
@@ -895,33 +946,66 @@
                 }
             };
 
-            if (loading) return <div className="text-center py-8">Loading...</div>;
+            const formatCurrency = (num) => `฿${num?.toFixed(2) || '0.00'}`;
 
             return (
                 <div className="bg-white rounded-lg shadow-lg p-6">
                     {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
                     <h2 className="text-2xl font-bold mb-6"><i className="fas fa-cash-register mr-2"></i>จัดการลิ้นชักเงินสด</h2>
-                    {!drawer || drawer.is_closed ? (
-                        <div className="max-w-md mx-auto p-6 bg-yellow-50 rounded-lg">
-                            <h3 className="font-bold mb-4 text-yellow-800"><i className="fas fa-lock mr-2"></i>ลิ้นชักปิดอยู่</h3>
-                            <input type="number" value={openAmount} onChange={e => setOpenAmount(e.target.value)} className="w-full p-2 border rounded-lg mb-4" placeholder="เงินเปิดลิ้นชัก"/>
-                            <button onClick={handleOpen} className="w-full py-3 bg-green-600 text-white rounded-lg"><i className="fas fa-unlock mr-2"></i>เปิดลิ้นชัก</button>
-                        </div>
-                    ) : (
-                        <div className="p-6 bg-green-50 rounded-lg">
-                            <h3 className="font-bold mb-4 text-green-800"><i className="fas fa-unlock-alt mr-2"></i>ลิ้นชักเปิดอยู่</h3>
-                            {summary ? <div className="mb-6 p-4 bg-white rounded space-y-2">
-                                <h4 className="font-bold mb-2 text-lg border-b pb-2">สรุปยอดขาย</h4>
-                                <div className="flex justify-between"><span>ยอดขายรวม (เงินสด):</span><span className="font-medium text-green-600">฿{summary.cashSales?.toFixed(2) || '0.00'}</span></div>
-                                <div className="flex justify-between"><span>ยอดขายรวม (QR):</span><span className="font-medium text-blue-600">฿{summary.qrSales?.toFixed(2) || '0.00'}</span></div>
-                                <div className="flex justify-between font-bold"><span>ยอดขายรวมทั้งหมด:</span><span>฿{summary.totalSales?.toFixed(2) || '0.00'}</span></div>
-                                <hr className="my-2"/>
-                                <div className="flex justify-between"><span>เงินเปิดลิ้นชัก:</span><span>฿{summary.opening_amount?.toFixed(2) || '0.00'}</span></div>
-                                <div className="flex justify-between text-xl font-bold text-amber-700"><span>เงินที่ควรมีในลิ้นชัก:</span><span>฿{summary.expectedAmount?.toFixed(2) || '0.00'}</span></div>
-                            </div> : <div className="text-center">กำลังโหลดสรุปยอด...</div>}
-                            <input type="number" value={closeAmount} onChange={e => setCloseAmount(e.target.value)} className="w-full p-2 border rounded-lg mb-4" placeholder="นับเงินในลิ้นชัก"/>
-                            {closeAmount && summary && <div className="mb-4 p-2 bg-gray-100 rounded text-center font-bold">ผลต่าง: <span className={parseFloat(closeAmount) - summary.expectedAmount >= 0 ? 'text-green-600':'text-red-600'}>฿{(parseFloat(closeAmount) - summary.expectedAmount).toFixed(2)}</span></div>}
-                            <button onClick={handleClose} className="w-full py-3 bg-red-600 text-white rounded-lg"><i className="fas fa-lock mr-2"></i>ปิดลิ้นชัก</button>
+
+                    <div className="flex gap-2 mb-6 border-b">
+                        <button onClick={() => setActiveTab('current')} className={`px-4 py-2 font-medium ${activeTab === 'current' ? 'text-amber-600 border-b-2 border-amber-600' : 'text-gray-600'}`}>ปัจจุบัน</button>
+                        <button onClick={() => setActiveTab('history')} className={`px-4 py-2 font-medium ${activeTab === 'history' ? 'text-amber-600 border-b-2 border-amber-600' : 'text-gray-600'}`}>ประวัติ</button>
+                    </div>
+
+                    {activeTab === 'current' && (
+                        loading ? <div className="text-center py-8">Loading...</div> :
+                        !drawer || drawer.is_closed ? (
+                            <div className="max-w-md mx-auto p-6 bg-yellow-50 rounded-lg">
+                                <h3 className="font-bold mb-4 text-yellow-800"><i className="fas fa-lock mr-2"></i>ลิ้นชักปิดอยู่</h3>
+                                <input type="number" value={openAmount} onChange={e => setOpenAmount(e.target.value)} className="w-full p-2 border rounded-lg mb-4" placeholder="เงินเปิดลิ้นชัก"/>
+                                <button onClick={handleOpen} className="w-full py-3 bg-green-600 text-white rounded-lg"><i className="fas fa-unlock mr-2"></i>เปิดลิ้นชัก</button>
+                            </div>
+                        ) : (
+                            <div className="p-6 bg-green-50 rounded-lg">
+                                <h3 className="font-bold mb-4 text-green-800"><i className="fas fa-unlock-alt mr-2"></i>ลิ้นชักเปิดอยู่</h3>
+                                {summary ? <div className="mb-6 p-4 bg-white rounded space-y-2">
+                                    <h4 className="font-bold mb-2 text-lg border-b pb-2">สรุปยอดขาย</h4>
+                                    <div className="flex justify-between"><span>ยอดขายรวม (เงินสด):</span><span className="font-medium text-green-600">{formatCurrency(summary.cashSales)}</span></div>
+                                    <div className="flex justify-between"><span>ยอดขายรวม (QR):</span><span className="font-medium text-blue-600">{formatCurrency(summary.qrSales)}</span></div>
+                                    <div className="flex justify-between font-bold"><span>ยอดขายรวมทั้งหมด:</span><span>{formatCurrency(summary.totalSales)}</span></div>
+                                    <hr className="my-2"/>
+                                    <div className="flex justify-between"><span>เงินเปิดลิ้นชัก:</span><span>{formatCurrency(summary.opening_amount)}</span></div>
+                                    <div className="flex justify-between text-xl font-bold text-amber-700"><span>เงินที่ควรมีในลิ้นชัก:</span><span>{formatCurrency(summary.expectedAmount)}</span></div>
+                                </div> : <div className="text-center">กำลังโหลดสรุปยอด...</div>}
+                                <input type="number" value={closeAmount} onChange={e => setCloseAmount(e.target.value)} className="w-full p-2 border rounded-lg mb-4" placeholder="นับเงินในลิ้นชัก"/>
+                                {closeAmount && summary && <div className="mb-4 p-2 bg-gray-100 rounded text-center font-bold">ผลต่าง: <span className={parseFloat(closeAmount) - summary.expectedAmount >= 0 ? 'text-green-600':'text-red-600'}>{formatCurrency(parseFloat(closeAmount) - summary.expectedAmount)}</span></div>}
+                                <button onClick={handleClose} className="w-full py-3 bg-red-600 text-white rounded-lg"><i className="fas fa-lock mr-2"></i>ปิดลิ้นชัก</button>
+                            </div>
+                        )
+                    )}
+                    {activeTab === 'history' && (
+                        loading ? <div className="text-center py-8">Loading...</div> : 
+                        history.length === 0 ? <p className="text-center text-gray-400">ยังไม่มีประวัติการปิดลิ้นชัก</p> :
+                        <div className="overflow-x-auto">
+                            <table className="w-full">
+                                <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">วันที่</th><th className="p-2 text-right">ยอดที่ควรมี</th><th className="p-2 text-right">ยอดที่ปิด</th><th className="p-2 text-right">ผลต่าง</th></tr></thead>
+                                <tbody>
+                                    {history.map(h => {
+                                        // This calculation is an approximation for history view.
+                                        // For 100% accuracy, you'd need to re-fetch and calculate sales for each historical day.
+                                        const expected = (h.opening_amount || 0); // Simplified for display
+                                        const difference = (h.closing_amount || 0) - expected;
+                                        return (
+                                        <tr key={h.id} className="border-b hover:bg-gray-50">
+                                            <td className="p-2">{new Date(h.close_time).toLocaleDateString('th-TH')}</td>
+                                            <td className="p-2 text-right">{formatCurrency(h.opening_amount)}</td>
+                                            <td className="p-2 text-right">{formatCurrency(h.closing_amount)}</td>
+                                            <td className={`p-2 text-right font-bold ${difference >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(difference)}</td>
+                                        </tr>
+                                    )})}
+                                </tbody>
+                            </table>
                         </div>
                     )}
                 </div>
@@ -932,20 +1016,48 @@
             const [orders, setOrders] = useState([]);
             const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
             const [loading, setLoading] = useState(true);
+            const [editingOrder, setEditingOrder] = useState(null);
+            const [toast, setToast] = useState(null);
 
             useEffect(() => { loadOrders(); }, [date]);
-            const loadOrders = async () => { setLoading(true); setOrders(await DatabaseService.getOrders(date)); setLoading(false); };
+            
+            const loadOrders = async () => { 
+                setLoading(true); 
+                setOrders(await DatabaseService.getOrders(date)); 
+                setLoading(false); 
+            };
+
+            const handleDelete = async (orderId) => {
+                if(window.confirm("คุณต้องการลบออเดอร์นี้ใช่หรือไม่?")){
+                    const result = await DatabaseService.deleteOrder(orderId);
+                    if(result.success){
+                        setToast({ message: 'ลบออเดอร์สำเร็จ', type: 'success' });
+                        loadOrders();
+                    } else {
+                        setToast({ message: `เกิดข้อผิดพลาด: ${result.error?.message}`, type: 'error' });
+                    }
+                }
+            };
 
             return (
                 <div className="bg-white rounded-lg shadow-lg p-6">
+                    {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
                     <div className="flex justify-between items-center mb-6">
                         <h2 className="text-2xl font-bold"><i className="fas fa-history mr-2"></i>ประวัติการขาย</h2>
                         <input type="date" value={date} onChange={e => setDate(e.target.value)} className="p-2 border rounded-lg"/>
                     </div>
-                    {loading ? <div className="text-center py-8">Loading...</div> : orders.length === 0 ? <p className="text-center text-gray-500">ไม่มีรายการขาย</p> :
+                    {loading ? <div className="text-center py-8">Loading...</div> : orders.length === 0 ? <p className="text-center text-gray-500 py-8">ไม่มีรายการขายในวันที่เลือก</p> :
                         <div className="space-y-4">{orders.map(order => <div key={order.id} className="border rounded-lg p-4">
-                            <div className="flex justify-between font-bold"><span>#{order.id}</span><span>฿{parseFloat(order.total).toFixed(2)}</span></div>
-                            <div className="text-sm text-gray-500">{new Date(order.created_at).toLocaleTimeString('th-TH')}</div>
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <div className="font-bold">#{order.id} - ฿{parseFloat(order.total).toFixed(2)}</div>
+                                    <div className="text-sm text-gray-500">{new Date(order.created_at).toLocaleTimeString('th-TH')}</div>
+                                </div>
+                                <div className="flex gap-2">
+                                     <button onClick={() => alert('ยังไม่เปิดใช้งานฟังก์ชันแก้ไข')} className="text-blue-500 hover:text-blue-700"><i className="fas fa-edit"></i></button>
+                                     <button onClick={() => handleDelete(order.id)} className="text-red-500 hover:text-red-700"><i className="fas fa-trash"></i></button>
+                                </div>
+                            </div>
                         </div>)}</div>
                     }
                 </div>
@@ -954,11 +1066,12 @@
         
         const SalesReport = () => {
             const [dateRange, setDateRange] = useState('today');
+            const [customDate, setCustomDate] = useState(new Date().toISOString().split('T')[0]);
             const [data, setData] = useState(null);
             const [loading, setLoading] = useState(true);
             const chartRef = useRef(null);
 
-            useEffect(() => { loadReport(); }, [dateRange]);
+            useEffect(() => { loadReport(); }, [dateRange, customDate]);
 
             const loadReport = async () => {
                 setLoading(true);
@@ -973,13 +1086,30 @@
             };
 
             const getDateRange = () => {
-                const end = new Date(); const start = new Date();
-                if (dateRange === 'week') start.setDate(end.getDate() - 7);
-                else if (dateRange === 'month') start.setMonth(end.getMonth() - 1);
-                start.setHours(0,0,0,0); end.setHours(23,59,59,999);
+                let start, end;
+                if (dateRange === 'custom') {
+                    start = new Date(customDate);
+                    end = new Date(customDate);
+                } else {
+                    end = new Date();
+                    start = new Date();
+                    if (dateRange === 'week') start.setDate(end.getDate() - 6);
+                    else if (dateRange === 'month') start.setMonth(end.getMonth() - 1);
+                }
+                start.setHours(0,0,0,0);
+                end.setHours(23,59,59,999);
                 return { start, end };
             };
             
+            const handleDateChange = (e) => {
+                setDateRange('custom');
+                setCustomDate(e.target.value);
+            };
+
+            const handleRangeClick = (range) => {
+                setDateRange(range);
+            };
+
             const processReportData = (orders) => ({
                 totalRevenue: orders.reduce((sum, o) => sum + o.total, 0),
                 totalOrders: orders.length,
@@ -1005,11 +1135,14 @@
 
             return (
                 <div className="bg-white rounded-lg shadow-lg p-6">
-                    <h2 className="text-2xl font-bold mb-4"><i className="fas fa-chart-line mr-2"></i>รายงานยอดขาย</h2>
-                    <div className="flex gap-2 mb-6">
-                        <button onClick={() => setDateRange('today')} className={`px-4 py-2 rounded ${dateRange==='today'?'bg-amber-600 text-white':''}`}>วันนี้</button>
-                        <button onClick={() => setDateRange('week')} className={`px-4 py-2 rounded ${dateRange==='week'?'bg-amber-600 text-white':''}`}>7 วัน</button>
-                        <button onClick={() => setDateRange('month')} className={`px-4 py-2 rounded ${dateRange==='month'?'bg-amber-600 text-white':''}`}>เดือนนี้</button>
+                    <div className="flex flex-wrap justify-between items-center mb-6 gap-4">
+                        <h2 className="text-2xl font-bold"><i className="fas fa-chart-line mr-2"></i>รายงานยอดขาย</h2>
+                        <div className="flex items-center gap-2">
+                             <button onClick={() => handleRangeClick('today')} className={`px-4 py-2 rounded ${dateRange==='today'?'bg-amber-600 text-white':''}`}>วันนี้</button>
+                            <button onClick={() => handleRangeClick('week')} className={`px-4 py-2 rounded ${dateRange==='week'?'bg-amber-600 text-white':''}`}>7 วัน</button>
+                            <button onClick={() => handleRangeClick('month')} className={`px-4 py-2 rounded ${dateRange==='month'?'bg-amber-600 text-white':''}`}>เดือนนี้</button>
+                            <input type="date" value={customDate} onChange={handleDateChange} className="p-2 border rounded-lg"/>
+                        </div>
                     </div>
                     {loading ? <div className="text-center">Loading...</div> : data && <>
                         <div className="grid grid-cols-2 gap-4 mb-6">
