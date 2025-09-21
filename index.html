@@ -146,9 +146,10 @@
 
                 async createOrder(orderData, userId) {
                     if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
+                    const { items, ...restOfOrderData } = orderData;
                     const { data, error } = await supabaseClient
                         .from('orders')
-                        .insert([{ ...orderData, user_id: userId, order_items: orderData.items }])
+                        .insert([{ ...restOfOrderData, user_id: userId, order_items: items }])
                         .select();
                     if (error) return { success: false, error };
                     return { success: true, data: data[0] };
@@ -232,10 +233,9 @@
 
                     const { data, error } = await supabaseClient
                         .from('orders')
-                        .select('total')
+                        .select('total, payment_method')
                         .gte('created_at', drawerData.open_time)
                         .lte('created_at', drawerData.close_time || new Date().toISOString())
-                        .eq('paymentMethod', 'cash')
                         .eq('is_deleted', false);
                     
                     if (error) {
@@ -243,10 +243,14 @@
                         return null;
                     }
 
-                    const cashSales = data.reduce((sum, o) => sum + o.total, 0);
+                    const cashSales = data?.filter(o => o.payment_method === 'cash').reduce((sum, o) => sum + o.total, 0) || 0;
+                    const qrSales = data?.filter(o => o.payment_method === 'qr').reduce((sum, o) => sum + o.total, 0) || 0;
+                    
                     return {
                         ...drawerData,
                         cashSales,
+                        qrSales,
+                        totalSales: cashSales + qrSales,
                         expectedAmount: (drawerData?.opening_amount || 0) + cashSales
                     };
                 },
@@ -767,7 +771,7 @@
                 const total = getTotalPrice();
                 const change = paymentMethod === 'cash' ? parseFloat(receivedAmount || 0) - total : 0;
                 if (paymentMethod === 'cash' && change < 0) return setToast({ message: 'รับเงินไม่พอ', type: 'error' });
-                const result = await DatabaseService.createOrder({ items: cart, total, paymentMethod, receivedAmount: paymentMethod === 'cash' ? parseFloat(receivedAmount) : total, change }, user.id);
+                const result = await DatabaseService.createOrder({ items: cart, total, payment_method: paymentMethod, received_amount: paymentMethod === 'cash' ? parseFloat(receivedAmount) : total, change }, user.id);
                 if (result.success) {
                     setToast({ message: `ขายสำเร็จ! ${paymentMethod === 'cash' ? `เงินทอน: ฿${change.toFixed(2)}` : ''}`, type: 'success' });
                     setCart([]); setShowPayment(false); setReceivedAmount(''); setPaymentMethod('cash');
@@ -872,14 +876,23 @@
             };
 
             const handleOpen = async () => {
+                if (!openAmount || parseFloat(openAmount) < 0) return setToast({ message: 'กรุณากรอกจำนวนเงิน', type: 'error' });
                 const result = await DatabaseService.openCashDrawer(user.id, parseFloat(openAmount));
-                if (result.success) { setToast({ message: 'เปิดลิ้นชักสำเร็จ', type: 'success' }); await checkDrawer(); }
-                else { setToast({ message: result.error.message, type: 'error' }); }
+                if (result.success) { 
+                    setToast({ message: 'เปิดลิ้นชักสำเร็จ', type: 'success' }); 
+                    await checkDrawer(); 
+                } else { 
+                    setToast({ message: result.error.message, type: 'error' }); 
+                }
             };
 
             const handleClose = async () => {
+                if (!closeAmount || parseFloat(closeAmount) < 0) return setToast({ message: 'กรุณากรอกจำนวนเงิน', type: 'error' });
                 const result = await DatabaseService.closeCashDrawer(drawer.id, parseFloat(closeAmount), user.id);
-                if (result.success) { setToast({ message: 'ปิดลิ้นชักสำเร็จ', type: 'success' }); await checkDrawer(); }
+                if (result.success) { 
+                    setToast({ message: 'ปิดลิ้นชักสำเร็จ', type: 'success' }); 
+                    await checkDrawer(); 
+                }
             };
 
             if (loading) return <div className="text-center py-8">Loading...</div>;
@@ -897,12 +910,15 @@
                     ) : (
                         <div className="p-6 bg-green-50 rounded-lg">
                             <h3 className="font-bold mb-4 text-green-800"><i className="fas fa-unlock-alt mr-2"></i>ลิ้นชักเปิดอยู่</h3>
-                            {summary && <div className="mb-6 p-4 bg-white rounded">
-                                <h4 className="font-bold mb-2">สรุปยอด</h4>
-                                <div className="flex justify-between"><span>เงินเปิด:</span><span>฿{parseFloat(summary.opening_amount).toFixed(2)}</span></div>
-                                <div className="flex justify-between"><span>ขายเงินสด:</span><span className="text-green-600">+฿{summary.cashSales.toFixed(2)}</span></div>
-                                <div className="border-t mt-2 pt-2 font-bold flex justify-between"><span>ควรมีในลิ้นชัก:</span><span>฿{summary.expectedAmount.toFixed(2)}</span></div>
-                            </div>}
+                            {summary ? <div className="mb-6 p-4 bg-white rounded space-y-2">
+                                <h4 className="font-bold mb-2 text-lg border-b pb-2">สรุปยอดขาย</h4>
+                                <div className="flex justify-between"><span>ยอดขายรวม (เงินสด):</span><span className="font-medium text-green-600">฿{summary.cashSales?.toFixed(2) || '0.00'}</span></div>
+                                <div className="flex justify-between"><span>ยอดขายรวม (QR):</span><span className="font-medium text-blue-600">฿{summary.qrSales?.toFixed(2) || '0.00'}</span></div>
+                                <div className="flex justify-between font-bold"><span>ยอดขายรวมทั้งหมด:</span><span>฿{summary.totalSales?.toFixed(2) || '0.00'}</span></div>
+                                <hr className="my-2"/>
+                                <div className="flex justify-between"><span>เงินเปิดลิ้นชัก:</span><span>฿{summary.opening_amount?.toFixed(2) || '0.00'}</span></div>
+                                <div className="flex justify-between text-xl font-bold text-amber-700"><span>เงินที่ควรมีในลิ้นชัก:</span><span>฿{summary.expectedAmount?.toFixed(2) || '0.00'}</span></div>
+                            </div> : <div className="text-center">กำลังโหลดสรุปยอด...</div>}
                             <input type="number" value={closeAmount} onChange={e => setCloseAmount(e.target.value)} className="w-full p-2 border rounded-lg mb-4" placeholder="นับเงินในลิ้นชัก"/>
                             {closeAmount && summary && <div className="mb-4 p-2 bg-gray-100 rounded text-center font-bold">ผลต่าง: <span className={parseFloat(closeAmount) - summary.expectedAmount >= 0 ? 'text-green-600':'text-red-600'}>฿{(parseFloat(closeAmount) - summary.expectedAmount).toFixed(2)}</span></div>}
                             <button onClick={handleClose} className="w-full py-3 bg-red-600 text-white rounded-lg"><i className="fas fa-lock mr-2"></i>ปิดลิ้นชัก</button>
