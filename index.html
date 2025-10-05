@@ -71,7 +71,19 @@
             }
 
             const createApi = (tableName) => {
-                const apiMethods = {
+                const update = async (id, updates) => {
+                    if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
+                    const { id: _, ...updateData } = updates;
+                    const { data, error } = await supabaseClient
+                        .from(tableName)
+                        .update(updateData)
+                        .eq('id', id)
+                        .select();
+                    if (error) return { success: false, error };
+                    return { success: true, data: data[0] };
+                };
+                
+                return {
                     async getAll(orderBy = 'display_order', ascending = true) {
                         if (!supabaseClient) return [];
                         const { data, error } = await supabaseClient
@@ -92,24 +104,11 @@
                         if (error) return { success: false, error };
                         return { success: true, data: data[0] };
                     },
-                    async update(id, updates) {
-                        if (!supabaseClient) return { success: false, error: { message: 'Supabase not configured' } };
-                        const { id: _, ...updateData } = updates;
-                        const { data, error } = await supabaseClient
-                            .from(tableName)
-                            .update(updateData)
-                            .eq('id', id)
-                            .select();
-                        if (error) return { success: false, error };
-                        return { success: true, data: data[0] };
+                    update,
+                    async remove(id) { // Soft delete
+                        return update(id, { is_active: false });
                     }
                 };
-                
-                apiMethods.remove = async (id) => { // Soft delete
-                    return apiMethods.update(id, { is_active: false });
-                };
-
-                return apiMethods;
             };
 
             const categoriesApi = createApi('categories');
@@ -665,7 +664,7 @@
                     
                      {activeTab === 'addons' && <div>
                         <div className="flex justify-end mb-4"><button onClick={() => setShowAddonForm(true)} className="px-4 py-2 bg-green-600 text-white rounded-lg"><i className="fas fa-plus mr-2"></i>เพิ่ม</button></div>
-                        {(showAddForm || editingAddon) && <div className="mb-6 p-4 border-2 border-amber-200 rounded-lg bg-amber-50">
+                        {(showAddonForm || editingAddon) && <div className="mb-6 p-4 border-2 border-amber-200 rounded-lg bg-amber-50">
                             <h3 className="font-bold mb-4 text-lg">{editingAddon ? 'แก้ไข' : 'เพิ่ม'}</h3>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <input type="text" placeholder="ชื่อ" value={addonFormData.name} onChange={e => setAddonFormData({...addonFormData, name: e.target.value})} className="p-2 border rounded-lg"/>
